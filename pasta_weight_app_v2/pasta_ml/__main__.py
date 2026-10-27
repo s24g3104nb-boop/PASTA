@@ -44,7 +44,7 @@ def main(argv=None):
     p = sub.add_parser('predict')
     p.add_argument('image')
     p.add_argument('--model', required=True)
-    p.add_argument('--mode', required=True, choices=('spread', 'bundle_end', 'bundle'))
+    p.add_argument('--mode', required=True, choices=('spread', 'bundle_end', 'bundle_side', 'bundle'))
     p.add_argument('--product-id', required=True)
     args = parser.parse_args(argv)
     try:

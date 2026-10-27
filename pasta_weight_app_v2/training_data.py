@@ -8,9 +8,11 @@ import io
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import warnings
+from uuid import uuid4
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -50,6 +52,8 @@ def _now():
 
 def init_training_db(db_path=DEFAULT_DB):
     with _connection(db_path) as con:
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='training_samples'").fetchone():
+            _upgrade_capture_modes(con)
         con.executescript('''
             CREATE TABLE IF NOT EXISTS training_samples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +61,7 @@ def init_training_db(db_path=DEFAULT_DB):
                 perceptual_hash TEXT NOT NULL,
                 image_filename TEXT NOT NULL,
                 actual_weight_g REAL NOT NULL CHECK(actual_weight_g > 0),
-                mode TEXT NOT NULL CHECK(mode IN ('spread', 'bundle_end')),
+                mode TEXT NOT NULL CHECK(mode IN ('spread', 'bundle_end', 'bundle_side')),
                 source TEXT NOT NULL CHECK(source IN ('real', 'synthetic')),
                 product_id TEXT NOT NULL,
                 batch_id TEXT NOT NULL,
@@ -87,6 +91,74 @@ def init_training_db(db_path=DEFAULT_DB):
                 UNIQUE(sample_id, version)
             );
         ''')
+
+
+def _upgrade_capture_modes(con):
+    """既知の旧CHECKだけを移行し、ID・列・索引・参照を同一トランザクションで保つ。"""
+    schema = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='training_samples'").fetchone()['sql']
+    if re.search(r"CHECK\s*\(\s*mode\s+IN\s*\([^)]*'bundle_side'[^)]*\)\s*\)", schema, re.IGNORECASE):
+        return
+    old_check = r"CHECK\s*\(\s*mode\s+IN\s*\(\s*'spread'\s*,\s*'bundle_end'\s*\)\s*\)"
+    expanded, count = re.subn(old_check, "CHECK(mode IN ('spread', 'bundle_end', 'bundle_side'))", schema,
+                             count=1, flags=re.IGNORECASE)
+    if count != 1:
+        raise ValueError('学習データの未知のスキーマです。既存DBを変更せずに移行を停止しました。')
+    temporary = '_training_samples_capture_modes_v2'
+    if con.execute('SELECT 1 FROM sqlite_master WHERE name=?', (temporary,)).fetchone():
+        raise ValueError('移行用のテーブル名が既に使用されています。既存DBは変更していません。')
+    create_sql, count = re.subn(
+        r'^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"training_samples"|`training_samples`|\[training_samples\]|training_samples)',
+        f'CREATE TABLE "{temporary}"', expanded, count=1, flags=re.IGNORECASE)
+    if count != 1:
+        raise ValueError('学習データのテーブル定義を安全に移行できません。')
+    # 元DB全体のバックアップはGit対象外のローカルに保存する。
+    database_file = next((row['file'] for row in con.execute('PRAGMA database_list') if row['name'] == 'main'), '')
+    if database_file:
+        database_path = Path(database_file)
+        backups = database_path.parent / 'backups'
+        backups.mkdir(parents=True, exist_ok=True)
+        backup_path = backups / f'{database_path.stem}.before-capture-modes-{uuid4().hex}.sqlite3'
+        with sqlite3.connect(backup_path) as backup:
+            con.backup(backup)
+    foreign_keys = con.execute('PRAGMA foreign_keys').fetchone()[0]
+    legacy_alter = con.execute('PRAGMA legacy_alter_table').fetchone()[0]
+    con.execute('PRAGMA foreign_keys=OFF')
+    con.execute('PRAGMA legacy_alter_table=ON')
+    try:
+        con.execute('BEGIN IMMEDIATE')
+        columns = [row['name'] for row in con.execute('PRAGMA table_xinfo(training_samples)') if row['hidden'] == 0]
+        selected = ','.join('"' + name.replace('"', '""') + '"' for name in columns)
+        indexes_and_triggers = [row['sql'] for row in con.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name='training_samples' AND type IN ('index','trigger') AND sql IS NOT NULL")]
+        has_sequence = con.execute("SELECT 1 FROM sqlite_master WHERE name='sqlite_sequence'").fetchone()
+        old_sequence = (con.execute("SELECT seq FROM sqlite_sequence WHERE name='training_samples'").fetchone()
+                        if has_sequence else None)
+        original_count = con.execute('SELECT count(*) FROM training_samples').fetchone()[0]
+        con.execute(create_sql)
+        con.execute(f'INSERT INTO "{temporary}" ({selected}) SELECT {selected} FROM training_samples')
+        if (con.execute(f'SELECT count(*) FROM "{temporary}"').fetchone()[0] != original_count
+                or con.execute(f'SELECT {selected} FROM training_samples EXCEPT SELECT {selected} FROM "{temporary}"').fetchone()
+                or con.execute(f'SELECT {selected} FROM "{temporary}" EXCEPT SELECT {selected} FROM training_samples').fetchone()):
+            raise ValueError('移行後の学習データが一致しないため、変更を取り消します。')
+        con.execute('DROP TABLE training_samples')
+        con.execute(f'ALTER TABLE "{temporary}" RENAME TO training_samples')
+        for statement in indexes_and_triggers:
+            con.execute(statement)
+        if old_sequence is not None:
+            current_sequence = con.execute("SELECT seq FROM sqlite_sequence WHERE name='training_samples'").fetchone()
+            if current_sequence is None:
+                con.execute("INSERT INTO sqlite_sequence(name,seq) VALUES ('training_samples',?)", (old_sequence[0],))
+            elif current_sequence[0] < old_sequence[0]:
+                con.execute("UPDATE sqlite_sequence SET seq=? WHERE name='training_samples'", (old_sequence[0],))
+        if con.execute('PRAGMA foreign_key_check').fetchall():
+            raise ValueError('移行後の参照整合性が不正です。既存DBへの変更を取り消します。')
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute(f'PRAGMA foreign_keys={int(foreign_keys)}')
+        con.execute(f'PRAGMA legacy_alter_table={int(legacy_alter)}')
 
 
 def _positive(value, label):
@@ -135,8 +207,8 @@ def _validate_metadata(metadata):
     mode = metadata['mode']
     if mode == 'bundle':
         mode = 'bundle_end'
-    if mode not in ('spread', 'bundle_end'):
-        raise ValueError('撮影状態はspreadまたはbundle_endにしてください。')
+    if mode not in ('spread', 'bundle_end', 'bundle_side'):
+        raise ValueError('撮影状態はspread・bundle_end・bundle_sideにしてください。')
     source = metadata['source']
     if source not in ('real', 'synthetic'):
         raise ValueError('写真の由来はrealまたはsyntheticにしてください。')

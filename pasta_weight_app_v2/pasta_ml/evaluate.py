@@ -52,6 +52,9 @@ def evaluate(samples, split, *, model=None, calibrations=None, allow_synthetic=F
         rgb = image_rgb(s.path)
         if model is not None:
             prediction = predict(model, rgb, s.values['mode'], s.values['product_id'])
+        elif s.values['mode'] == 'bundle_side':
+            prediction = dict(success=False, predicted_g=None,
+                              reason='束の側面・上面はOpenCV断面検出の適用外です。対応する回帰モデルと実測写真で評価してください')
         elif s.values['product_id'] not in (calibrations or {}):
             prediction = dict(success=False, predicted_g=None, reason='製品の1本重量の校正値がありません')
         else:

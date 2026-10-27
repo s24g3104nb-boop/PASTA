@@ -47,7 +47,13 @@ def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_
     if using_demo or active['artifact']['source'] != 'real':
         st.warning('実写モデルの測定には実物の写真を使用してください。CGは精度評価に使えません。')
         return
-    canonical_mode = 'spread' if mode == '広げた状態' else 'bundle_end'
+    modes = {'広げた状態': 'spread', '束の断面': 'bundle_end',
+             '束の側面・上面（回帰用）': 'bundle_side',
+             'spread': 'spread', 'bundle_end': 'bundle_end', 'bundle_side': 'bundle_side'}
+    canonical_mode = modes.get(mode)
+    if canonical_mode is None:
+        st.warning('撮影状態を確認してください。未知の状態を断面として扱いません。')
+        return
     prediction = predict(active['artifact'], rgb, canonical_mode, str(product['id']))
     st.image(rgb, caption='回帰モデルへの入力画像', width='stretch')
     if not prediction['success']:

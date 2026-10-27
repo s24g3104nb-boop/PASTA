@@ -11,6 +11,7 @@ from training_data import (delete_sample, init_training_db, list_samples,
                            register_sample, update_sample)
 from training_manager import (activate_model, get_active_model, init_training_manager,
                               list_jobs, list_models, start_training)
+from photo_intake_ui import render_photo_intake
 
 
 def _fields(prefix, products, current=None):
@@ -29,9 +30,11 @@ def _fields(prefix, products, current=None):
                              value=float(current['actual_weight_g']) if current else None,
                              step=0.1, key=f'{prefix}_weight',
                              help='未入力の写真は登録・学習できません。推定値を正解値にしないでください。')
-    mode = st.selectbox('撮影状態', ['spread', 'bundle_end'],
-                        index=1 if current.get('mode') == 'bundle_end' else 0,
-                        format_func=lambda value: '広げた状態' if value == 'spread' else '束の状態',
+    modes = ['spread', 'bundle_end', 'bundle_side']
+    mode = st.selectbox('撮影状態', modes,
+                        index=modes.index(current['mode']) if current.get('mode') in modes else 0,
+                        format_func=lambda value: {'spread': '広げた状態', 'bundle_end': '束の断面',
+                                                   'bundle_side': '束の側面・上面（回帰用）'}[value],
                         key=f'{prefix}_mode')
     pasta_type = st.text_input('パスタの種類', value=current.get('pasta_type', ''),
                                placeholder='スパゲッティ', key=f'{prefix}_type')
@@ -72,6 +75,8 @@ def render_training_tab(db_path=DEFAULT_DB):
     st.caption('ローカル管理者向けです。写真と実測重量を登録し、CPU回帰モデルを別プロセスで学習します。')
     st.warning('実写真による精度は未検証です。5重量の写真だけで35g・75g等への精度を保証できません。'
                '公開認証は未実装のため、この管理画面を無認証で外部公開しないでください。')
+    with st.expander('受領パッケージ・重量確認・画像検品', expanded=False):
+        render_photo_intake(db_path)
     products = list_products(db_path)
     with st.expander('写真と実測重量を登録', expanded=True):
         with st.form('training_register'):

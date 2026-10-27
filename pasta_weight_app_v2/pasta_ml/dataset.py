@@ -85,8 +85,8 @@ def load_dataset(csv_path, image_root=None):
                     raise ValueError('必須値が空です')
                 if values['mode'] == 'bundle':
                     values['mode'] = 'bundle_end'
-                if values['mode'] not in ('spread', 'bundle_end'):
-                    raise ValueError('modeはspread/bundle_endです（bundleも可）')
+                if values['mode'] not in ('spread', 'bundle_end', 'bundle_side'):
+                    raise ValueError('modeはspread/bundle_end/bundle_sideです（bundleは断面の別名）')
                 if values['source'] not in ('real', 'synthetic'):
                     raise ValueError('sourceはreal/syntheticです')
                 weight = float(values['actual_weight_g'])

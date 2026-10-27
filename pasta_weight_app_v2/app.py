@@ -42,15 +42,17 @@ measure_tab, history_tab, product_tab, cooking_tab, training_tab, guide_tab = st
 
 with measure_tab:
     st.subheader('1. 撮影状態を選択')
-    mode = st.radio('乾麺の置き方', ['広げた状態', '束の断面'], horizontal=True,
-                    help='束を横から撮るのではなく、切り口（先端）を手前に向けて撮影します。')
+    mode = st.radio('乾麺の置き方', ['広げた状態', '束の断面', '束の側面・上面（回帰用）'], horizontal=False,
+                    help='OpenCVの円検出は正面の断面のみが対象です。束の側面・上面は別の回帰モデルで扱います。')
     st.subheader('2. 画像を選択')
     source_kind = st.radio('画像の入力方法',
                            ['サンプル画像（今すぐ試す）', '写真をアップロード', 'スマホで撮影'],
                            horizontal=False)
     photo = None
     using_demo = source_kind.startswith('サンプル')
-    if using_demo:
+    if using_demo and mode == '束の側面・上面（回帰用）':
+        st.info('この状態のCGサンプルはありません。対応する実写真を使用してください。')
+    elif using_demo:
         path = BASE_DIR / 'sample_images' / ('demo_spread_12.png' if mode == '広げた状態'
                                              else 'demo_bundle_16.png')
         photo = Image.open(path)
@@ -93,11 +95,13 @@ with measure_tab:
             val = st.slider('明るさ（最小輝度）', 0, 180, 75, 5)
             min_area = st.slider('領域の最小面積（画素）', 30, 2500, 160, 10)
             elongation = st.slider('細長さの基準', 1.5, 8.0, 3.0, 0.5)
-        else:
+        elif mode == '束の断面':
             min_radius = st.slider('円の最小半径（画素）', 2, 35, 8)
             max_radius = st.slider('円の最大半径（画素）', 9, 65, 27)
             min_distance = st.slider('検出円の最小間隔（画素）', 5, 90, 32)
             sensitivity = st.slider('円検出の厳しさ（大きいほど厳しい）', 5, 45, 18)
+        else:
+            st.caption('束の側面・上面はHough円検出の対象外です。対応する回帰モデルが必要です。')
 
     if photo is None:
         st.info('サンプル画像を選択するか、乾麺写真をアップロードしてください。')
@@ -120,11 +124,13 @@ with measure_tab:
                 # expander は閉じていてもStreamlitウィジェットが作られる。
                 result = detect_spread(rgb, saturation_min=sat, value_min=val,
                                        min_area=min_area, min_elongation=elongation)
-            else:
+            elif mode == '束の断面':
                 result = detect_bundle_ends(rgb, min_radius=min_radius,
                                             max_radius=max_radius,
                                             min_distance=min_distance,
                                             hough_sensitivity=sensitivity)
+            else:
+                raise ValueError('束の側面・上面はOpenCV断面検出の対象外です。学習モデル方式を選択してください。')
         except Exception as exc:
             st.error(f'画像を解析できませんでした。画像形式または設定を確認してください。詳細: {exc}')
         else:
