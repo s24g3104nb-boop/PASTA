@@ -1,0 +1,20 @@
+# Python / local secrets / real-user data
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+.env.*
+*.log
+**/data/
+*.sqlite3
+*.sqlite
+*.db
+**/datasets/raw/
+**/dataset/raw/
+**/user_photos/
+**/models/*.pt
+**/models/*.pth
+**/models/*.onnx
