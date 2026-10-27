@@ -1,4 +1,4 @@
-"""🍝 乾麺重量推定 Webアプリ: Streamlit + OpenCV（AIなしの試作段階）。"""
+"""Pasta Lens: 乾麺推定、学習管理と材料ベース栄養計算。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +14,10 @@ from pasta_vision import detect_bundle_ends, detect_spread, image_to_rgb, nutrit
 from storage import (DATA_DIR, init_db, list_measurements, list_products,
                      save_measurement, save_product)
 from cooking_ui import render_cooking_tab
+from training_ui import render_training_tab
+from training_manager import get_active_model
+from measurement_ui import render_weight_result, render_regression_measurement
+from pasta_vision import image_quality_warnings
 
 BASE_DIR = Path(__file__).resolve().parent
 st.set_page_config(page_title='Pasta Lens | 乾麺量推定', page_icon='🍝', layout='centered')
@@ -29,12 +33,12 @@ div[data-testid="stMetric"] {border: 1px solid #d8d8d8; padding: 12px; border-ra
 </style>''', unsafe_allow_html=True)
 
 st.title('🍝 Pasta Lens')
-st.caption('乾麺の写真から本数を数えて、重量と栄養を推定するプロトタイプ')
-st.info('画面の乾麺推定は **OpenCVを使う試作** です。実写モデルはまだ学習していません。'
-        '学習・評価CLIは別途用意しています。実物写真での精度は未検証です。', icon='ℹ️')
+st.caption('乾麺の写真から重量と栄養を推定するプロトタイプ')
+st.info('OpenCV本数検出と実験用の重量回帰を比較できます。AI学習管理で実写真を登録・学習し、'
+        'モデルを選択できます。実物写真での精度はまだ未検証です。', icon='ℹ️')
 
-measure_tab, history_tab, product_tab, cooking_tab, guide_tab = st.tabs(
-    ['📷 重量を推定', '🕒 測定履歴', '📦 パスタデータ', '🍳 料理と栄養', '❓ 使い方'])
+measure_tab, history_tab, product_tab, cooking_tab, training_tab, guide_tab = st.tabs(
+    ['📷 重量を推定', '🕒 測定履歴', '📦 パスタデータ', '🍳 料理と栄養', '🧪 AI学習管理', '❓ 使い方'])
 
 with measure_tab:
     st.subheader('1. 撮影状態を選択')
@@ -73,6 +77,16 @@ with measure_tab:
         st.warning('この製品は1本あたりの重量が未設定です。まずパスタデータから校正値を登録してください。')
 
     st.subheader('4. 写真を解析')
+    method = st.radio('推定方式', ['OpenCV本数検出', '学習モデル（実験用回帰）'], key='estimate_method')
+    using_regression = method.startswith('学習')
+    active_model = None
+    model_error = None
+    if using_regression:
+        try:
+            active_model = get_active_model()
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            model_error = str(exc)
+
     with st.expander('検出パラメータを調整（うまく数えられない場合）'):
         if mode == '広げた状態':
             sat = st.slider('色の濃さ（最小彩度）', 0, 120, 20, 5)
@@ -90,12 +104,19 @@ with measure_tab:
     else:
         try:
             rgb = image_to_rgb(photo)
-            input_key = hashlib.sha256(rgb.tobytes()).hexdigest() + mode + str(p_id) + source_kind
+            input_key = (hashlib.sha256(rgb.tobytes()).hexdigest() + mode + str(p_id) + source_kind
+                         + method + (active_model['id'] if active_model else ''))
             if st.session_state.get('measurement_input') != input_key:
                 for key in ('override_count', 'manual_count', 'actual_known'):
                     st.session_state.pop(key, None)
                 st.session_state['measurement_input'] = input_key
-            if mode == '広げた状態':
+            if not using_demo:
+                problems = image_quality_warnings(rgb)
+                if problems:
+                    raise ValueError(' '.join(problems))
+            if using_regression:
+                result = None
+            elif mode == '広げた状態':
                 # expander は閉じていてもStreamlitウィジェットが作られる。
                 result = detect_spread(rgb, saturation_min=sat, value_min=val,
                                        min_area=min_area, min_elongation=elongation)
@@ -107,64 +128,43 @@ with measure_tab:
         except Exception as exc:
             st.error(f'画像を解析できませんでした。画像形式または設定を確認してください。詳細: {exc}')
         else:
-            st.image(result.overlay_rgb, caption='検出箇所：赤枠 / 赤丸',
-                     width='stretch')
-            with st.expander('色抽出マスクを表示'):
-                st.image(result.mask, caption='白い部分が検出対象', width='stretch')
-            st.metric(result.description, f'{result.count} 個')
-            for msg in result.warnings:
-                st.caption('⚠️ ' + msg)
-
-            override = st.checkbox('誤検出があるので、本数を手動修正する',
-                                   key='override_count')
-            if override:
-                detected_count = st.number_input('実際に確認した本数', min_value=0,
-                                                  value=result.count, step=1,
-                                                  key='manual_count')
-                st.caption('この値は手動入力です。AIが認識した結果ではありません。')
+            if using_regression:
+                if model_error:
+                    st.error(f'モデルを読み込めません: {model_error}')
+                elif active_model is None:
+                    st.warning('有効なモデルがありません。AI学習管理で実写真のモデルを学習・選択してください。')
+                else:
+                    render_regression_measurement(active_model, rgb=rgb, product=product,
+                                                  mode=mode, using_demo=using_demo)
             else:
-                detected_count = result.count
+                st.image(result.overlay_rgb, caption='検出箇所：赤枠 / 赤丸',
+                         width='stretch')
+                with st.expander('色抽出マスクを表示'):
+                    st.image(result.mask, caption='白い部分が検出対象', width='stretch')
+                st.metric(result.description, f'{result.count} 個')
+                for msg in result.warnings:
+                    st.caption('⚠️ ' + msg)
 
-            if detected_count <= 0:
-                st.warning('本数が0のため推定できません。画像やパラメータを変更してください。')
-            elif product['g_per_strand'] <= 0:
-                st.warning('選択した製品の「1本あたりの重量」を登録すると推定できます。')
-            else:
-                weight = detected_count * product['g_per_strand']
-                nutrit = nutrition_for_weight(weight, product['kcal_100'],
-                                              product['protein_100'],
-                                              product['fat_100'], product['carb_100'])
-                st.subheader('5. 推定結果')
-                c1, c2 = st.columns(2)
-                c1.metric('推定重量', f'{weight:.1f} g')
-                c2.metric('推定カロリー', f'{nutrit["kcal"]:.1f} kcal')
-                c3, c4, c5 = st.columns(3)
-                c3.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
-                c4.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
-                c5.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
-                st.caption(f'計算：{detected_count}本 × {product["g_per_strand"]:.4f} g/本'
-                           f' = {weight:.2f} g。栄養値は乾麺のみで、ソースは含みません。')
-                has_actual = st.checkbox('実際にはかりで測った重量が分かる',
-                                         key='actual_known')
-                actual = None
-                if has_actual:
-                    actual = st.number_input('実測重量（g）', min_value=0.1,
-                                             value=50.0, step=0.1)
-                    st.write(f'絶対誤差：**{abs(weight - actual):.1f} g**'
-                             f' ／ 誤差率：**{abs(weight - actual) / actual * 100:.1f}%**')
-                if st.button('💾 この測定結果を保存', type='primary', width='stretch'):
-                    try:
-                        save_measurement(product_name=product['name'], mode=mode,
-                                         detected_count=detected_count, estimated_g=weight,
-                                         actual_g=actual, nutrition=nutrit, image_rgb=rgb,
-                                         source_kind='synthetic' if using_demo else 'real',
+                override = st.checkbox('誤検出があるので、本数を手動修正する',
+                                       key='override_count')
+                if override:
+                    detected_count = st.number_input('実際に確認した本数', min_value=0,
+                                                      value=result.count, step=1,
+                                                      key='manual_count')
+                    st.caption('この値は手動入力です。AIが認識した結果ではありません。')
+                else:
+                    detected_count = result.count
+
+                if detected_count <= 0:
+                    st.warning('本数が0のため推定できません。画像やパラメータを変更してください。')
+                elif product['g_per_strand'] <= 0:
+                    st.warning('選択した製品の「1本あたりの重量」を登録すると推定できます。')
+                else:
+                    weight = detected_count * product['g_per_strand']
+                    render_weight_result(weight=weight, product=product, rgb=rgb, mode=mode,
+                                         using_demo=using_demo, detected_count=detected_count,
                                          estimator='manual_count' if override else 'opencv',
-                                         product_snapshot=product)
-                        st.success('測定履歴に保存しました。上部の「測定履歴」から確認できます。')
-                    except (OSError, ValueError, sqlite3.Error) as exc:
-                        st.error(f'保存できませんでした。保存先と入力を確認してください: {exc}')
-                st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
-                           '電子はかりで確認してください。')
+                                         explanation=f'計算：{detected_count}本 × {product["g_per_strand"]:.4f}g/本 = {weight:.2f}g。')
 
 with history_tab:
     st.subheader('測定履歴')
@@ -179,14 +179,20 @@ with history_tab:
         shown = frame.rename(columns={
             'id': 'ID', 'created_at': '日時', 'product_name': '製品',
             'mode': '撮影状態', 'detected_count': '本数',
-            'estimated_g': '推定g', 'actual_g': '実測g', 'kcal': 'kcal',
+            'estimated_g': '推定g', 'actual_g': '実測g', 'kcal': 'kcal', 'estimator': '方式', 'source_kind': '画像種別',
         })
-        st.dataframe(shown[['ID', '日時', '製品', '撮影状態', '本数', '推定g', '実測g', '誤差(g)', 'kcal']],
+        shown.loc[shown['方式'].str.startswith('ridge:'), '本数'] = None
+        st.dataframe(shown[['方式', '画像種別', 'ID', '日時', '製品', '撮影状態', '本数', '推定g', '実測g', '誤差(g)', 'kcal']],
                      hide_index=True, width='stretch')
-        measured = frame.dropna(subset=['actual_g'])
+        measured = frame[(frame['source_kind'] == 'real') & (frame['actual_g'] > 0)].copy()
         if len(measured):
-            error = (measured['estimated_g'] - measured['actual_g']).abs().mean()
-            st.metric('実測値がある履歴の平均絶対誤差（MAE）', f'{error:.2f} g')
+            measured['absolute_error_g'] = (measured['estimated_g'] - measured['actual_g']).abs()
+            measured['absolute_percentage_error'] = measured['absolute_error_g'] / measured['actual_g'] * 100
+            st.metric('実写・実測値がある履歴のMAE', f"{measured['absolute_error_g'].mean():.2f} g")
+            st.dataframe(measured.groupby(['mode', 'estimator']).agg(
+                件数=('id', 'count'), MAE_g=('absolute_error_g', 'mean'),
+                MAPE_percent=('absolute_percentage_error', 'mean')).reset_index(), hide_index=True)
+            st.caption('保存された推定成功分の参考値です。学習モデルの評価は独立した写真で行ってください。')
         chosen = st.selectbox('写真を確認する履歴ID', options=frame['id'].tolist())
         entry = next(r for r in rows if r['id'] == chosen)
         path = DATA_DIR / 'photos' / (entry['image_filename'] or '')
@@ -241,6 +247,9 @@ with product_tab:
 with cooking_tab:
     render_cooking_tab()
 
+with training_tab:
+    render_training_tab()
+
 with guide_tab:
     st.subheader('準備するもの')
     st.markdown('''
@@ -255,7 +264,7 @@ with guide_tab:
     **基準物：** 定規や硬貨は不要。ただし、製品ごとの1本当たりの重量は事前の実測が必要です。
 
     **実装状況：** 写真入力、OpenCV検出、重量・栄養計算、商品登録、履歴保存。
-    束はHough変換で円を検出する試験段階。乾麺の学習・評価はCLIで実行できます。
+    束はHough変換で円を検出する試験段階。乾麺の学習・評価はAI学習管理画面とCLIで実行できます。
     料理名の画像分類器は未学習です。料理タブでは手動選択と材料入力で栄養を計算します。
 
     **データの取扱い：** 保存した写真・履歴は、このPythonアプリを動かしているPCの

@@ -72,7 +72,10 @@ def dry_snapshot(record: Mapping) -> dict:
 
 
 def calculate_meal(snapshot: Mapping, ingredients: Sequence[Ingredient], *,
-                   servings: int | None = None, consumed_fraction: float | None = None) -> dict:
+                   servings: int | None = None, consumed_fraction: float | None = None,
+                   nutrition_basis: str = 'confirmed_amounts') -> dict:
+    if nutrition_basis not in ('confirmed_amounts', 'template_estimate'):
+        raise ValueError('栄養計算の根拠が不正です。')
     if (servings is None) == (consumed_fraction is None):
         raise ValueError('等分人数か食べる割合のどちらか一方を指定してください。')
     if servings is not None:
@@ -97,5 +100,21 @@ def calculate_meal(snapshot: Mapping, ingredients: Sequence[Ingredient], *,
     return {'dry': dry, 'additional': additional, 'total': total,
             'portion': {key: value * fraction for key, value in total.items()},
             'servings': servings, 'consumed_fraction': fraction,
+            'nutrition_basis': nutrition_basis,
             'ingredients': [asdict(item) for item in validated],
             'assumptions': '利用者が入力・確認した全材料と使用量に基づく計算。写真から材料量は分かりません。'}
+
+
+def template_ingredients(template: Mapping, dry_weight_g: float) -> list[Ingredient]:
+    """利用者のレシピを乾麺重量比で仮入力する。実際の使用量ではない。"""
+    reference = nonnegative(template['reference_dry_g'], 'テンプレートの基準乾麺g')
+    weight = nonnegative(dry_weight_g, '今回の乾麺g')
+    if reference <= 0 or weight <= 0:
+        raise ValueError('乾麺gは0より大きい必要があります。')
+    result = []
+    for row in template['ingredients']:
+        item = Ingredient(**row).validated()
+        values = asdict(item)
+        values['amount_g'] *= weight / reference
+        result.append(Ingredient(**values).validated())
+    return result

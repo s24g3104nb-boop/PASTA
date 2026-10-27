@@ -18,6 +18,14 @@ MAX_PIXELS = 30_000_000
 MAX_BYTES = 30_000_000
 
 
+def normalized_rgb(image):
+    image = ImageOps.exif_transpose(image)
+    if 'A' in image.getbands() or 'transparency' in image.info:
+        rgba = image.convert('RGBA')
+        image = Image.alpha_composite(Image.new('RGBA', rgba.size, (255, 255, 255, 255)), rgba)
+    return np.asarray(image.convert('RGB')).copy()
+
+
 @dataclass
 class Sample:
     values: dict
@@ -46,7 +54,7 @@ def image_rgb(path):
             if im.width * im.height > MAX_PIXELS or min(im.size) < 16:
                 raise ValueError('画像寸法は各辺16px以上・合計3000万画素以下が必要です')
             im.load()
-            return np.asarray(ImageOps.exif_transpose(im).convert('RGB')).copy()
+            return normalized_rgb(im)
 
 
 def hashes(rgb):

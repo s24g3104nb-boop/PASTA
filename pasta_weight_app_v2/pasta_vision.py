@@ -67,6 +67,20 @@ def finite_nonnegative(value, name: str) -> float:
     return number
 
 
+def image_quality_warnings(rgb: np.ndarray) -> list[str]:
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    warnings = []
+    if min(rgb.shape[:2]) < 64:
+        warnings.append('画像が小さすぎます。乾麺を大きく撮り直してください。')
+    if gray.mean() < 15:
+        warnings.append('暗すぎて判別できません。明るさを改善して再撮影してください。')
+    elif gray.mean() > 245 and gray.std() < 8:
+        warnings.append('白飛びまたは対象がほとんど見えません。露出と背景を変えてください。')
+    if cv2.Laplacian(gray, cv2.CV_64F).var() < 3:
+        warnings.append('輪郭を確認できません。ピントを合わせて再撮影してください。')
+    return warnings
+
+
 def _yellow_mask(rgb: np.ndarray, saturation_min: int, value_min: int) -> np.ndarray:
     if (not isinstance(rgb, np.ndarray) or rgb.dtype != np.uint8
             or rgb.ndim != 3 or rgb.shape[2] != 3 or min(rgb.shape[:2]) < 2):

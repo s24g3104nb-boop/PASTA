@@ -10,6 +10,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pasta_vision import image_to_rgb, nutrition_for_weight, detect_bundle_ends, detect_spread
 from storage import init_db, list_measurements, save_measurement, save_product
+from pasta_vision import image_quality_warnings
 
 
 @pytest.mark.parametrize('value', [-1, float('nan'), float('inf')])
@@ -50,6 +51,22 @@ def test_detector_invalid_parameters_and_empty_image():
         detect_bundle_ends(rgb, min_distance=0)
     with pytest.raises(ValueError):
         detect_bundle_ends(rgb, min_radius=22, max_radius=5)
+
+
+def test_quality_gate_for_dark_overexposed_small_and_normal_sample(tmp_path):
+    assert any('暗すぎ' in s for s in image_quality_warnings(np.zeros((100, 100, 3), dtype=np.uint8)))
+    assert any('白飛び' in s for s in image_quality_warnings(np.full((100, 100, 3), 255, dtype=np.uint8)))
+    assert any('小さすぎ' in s for s in image_quality_warnings(np.zeros((32, 32, 3), dtype=np.uint8)))
+    from generate_demo import generate_images
+    generate_images(tmp_path)
+    assert image_quality_warnings(image_to_rgb(tmp_path / 'demo_spread_12.png')) == []
+
+
+def test_training_and_measurement_share_transparent_preprocessing(tmp_path):
+    from pasta_weight_app_v2.pasta_ml.dataset import image_rgb
+    path = tmp_path / 'transparent.png'
+    Image.new('RGBA', (80, 80), (200, 0, 0, 0)).save(path)
+    assert np.array_equal(image_rgb(path), image_to_rgb(path))
 
 
 def test_additive_migration_preserves_legacy_record(tmp_path):

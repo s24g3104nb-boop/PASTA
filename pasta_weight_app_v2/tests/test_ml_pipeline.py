@@ -17,7 +17,7 @@ from pasta_weight_app_v2.pasta_ml.dataset import (
     split_dataset, validate_splits, write_csv,
 )
 from pasta_weight_app_v2.pasta_ml.evaluate import evaluate, load_calibrations, summary
-from pasta_weight_app_v2.pasta_ml.model import features, load_model, predict, train
+from pasta_weight_app_v2.pasta_ml.model import FEATURE_VERSION, MODEL_VERSION, features, load_model, predict, train
 from pasta_weight_app_v2.generate_demo import generate_images
 
 
@@ -163,7 +163,7 @@ def test_training_explicit_synthetic_and_safe_model_roundtrip(dataset, tmp_path)
 
 
 @pytest.mark.parametrize('payload', [[], None, {'entries': []},
-                         {'model_version': 'numpy-ridge-v1', 'feature_version': 'rgb-hsv-yellow-grid-v1',
+                         {'model_version': MODEL_VERSION, 'feature_version': FEATURE_VERSION,
                           'source': 'real', 'entries': [{}]}])
 def test_invalid_model_schema_is_user_error(tmp_path, payload):
     path = tmp_path / 'malformed.json'

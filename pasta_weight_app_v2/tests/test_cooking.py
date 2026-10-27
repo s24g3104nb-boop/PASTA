@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cooking import Ingredient, calculate_meal, dry_snapshot
-from cooking_storage import init_cooking_db, list_cooking_sessions, save_cooking_session
+from cooking import Ingredient, calculate_meal, dry_snapshot, template_ingredients
+from cooking_storage import (delete_recipe_template, init_cooking_db, list_cooking_sessions,
+                             list_recipe_templates, save_cooking_session, save_recipe_template)
 from dish_classifier import UntrainedDishClassifier
 from pasta_vision import nutrition_for_weight
 from storage import init_db, list_measurements, list_products, save_measurement
@@ -156,3 +157,87 @@ def test_invalid_material_does_not_save_partial_session(tmp_path):
                              ingredients=[Ingredient('油', None, 900, 0, 100, 0)],
                              servings=1, db_path=db)
     assert list_cooking_sessions(db) == []
+
+
+def register_template(db, **changes):
+    values = dict(name='利用者レシピ', selected_dish='カルボナーラ', ingredients=ingredients(),
+                  reference_dry_g=100, default_servings=2, source='試験用製品ラベルと利用者分量', db_path=db)
+    values.update(changes)
+    return save_recipe_template(**values)
+
+
+def test_recipe_template_reuse_scale_snapshot_and_delete(tmp_path):
+    db, measurement_id = setup_db(tmp_path)
+    template_id = register_template(db)
+    template = list_recipe_templates(db)[0]
+    assert template['id'] == template_id
+    assert template['reference_dry_g'] == 100
+    assert template_ingredients(template, 200)[0].amount_g == 100
+    save_cooking_session(measurement_id=measurement_id, selected_dish='カルボナーラ',
+                         confirmed_same_batch=True, ingredients=template_ingredients(template, 100),
+                         servings=2, recipe_template_id=template_id, db_path=db)
+    saved = list_cooking_sessions(db)[0]['calculation']
+    assert saved['total']['kcal'] == 600
+    assert saved['portion']['kcal'] == 300
+    assert saved['nutrition_basis'] == 'template_estimate'
+    assert saved['recipe_template']['source'] == '試験用製品ラベルと利用者分量'
+    delete_recipe_template(template_id, db_path=db)
+    assert list_recipe_templates(db) == []
+    assert list_cooking_sessions(db)[0]['calculation'] == saved
+
+
+@pytest.mark.parametrize('changes', [{'name': ''}, {'source': ''}, {'reference_dry_g': 0},
+                                    {'default_servings': 0}, {'ingredients': []},
+                                    {'ingredients': [Ingredient('油', None, 900, 0, 100, 0)]}])
+def test_recipe_template_requires_known_inputs(tmp_path, changes):
+    with pytest.raises(ValueError):
+        register_template(tmp_path / 'template.sqlite3', **changes)
+
+
+def test_template_missing_or_mismatched_dish_refused(tmp_path):
+    db, measurement_id = setup_db(tmp_path)
+    template_id = register_template(db)
+    for selected_dish, recipe_id in [('ボロネーゼ', template_id), ('カルボナーラ', 999)]:
+        with pytest.raises(ValueError):
+            save_cooking_session(measurement_id=measurement_id, selected_dish=selected_dish,
+                                 confirmed_same_batch=True, ingredients=ingredients(), servings=1,
+                                 recipe_template_id=recipe_id, db_path=db)
+    assert list_cooking_sessions(db) == []
+
+
+def test_same_measurement_reuse_refused_and_old_duplicates_preserved(tmp_path):
+    db, measurement_id = setup_db(tmp_path)
+    values = dict(measurement_id=measurement_id, selected_dish='カルボナーラ',
+                  confirmed_same_batch=True, ingredients=ingredients(), servings=2, db_path=db)
+    save_cooking_session(**values)
+    with pytest.raises(ValueError, match='二重計上'):
+        save_cooking_session(**values)
+    with sqlite3.connect(db) as con:
+        con.execute('''INSERT INTO cooking_sessions
+            (measurement_id, created_at, selected_dish, same_batch_confirmed, classifier_status,
+             dry_snapshot_json, calculation_json)
+            SELECT measurement_id, created_at, selected_dish, same_batch_confirmed, classifier_status,
+                   dry_snapshot_json, calculation_json FROM cooking_sessions''')
+    rows = list_cooking_sessions(db)
+    assert len(rows) == 2
+    assert all(row['duplicate_measurement_count'] == 2 for row in rows)
+    with pytest.raises(ValueError, match='二重計上'):
+        save_cooking_session(**values)
+    assert len(list_cooking_sessions(db)) == 2
+
+
+def test_concurrent_saves_do_not_double_count(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    db, measurement_id = setup_db(tmp_path)
+    init_cooking_db(db)
+    def save():
+        try:
+            return save_cooking_session(measurement_id=measurement_id, selected_dish='カルボナーラ',
+                                        confirmed_same_batch=True, ingredients=ingredients(),
+                                        servings=2, db_path=db)
+        except ValueError as exc:
+            return str(exc)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: save(), range(2)))
+    assert sum(isinstance(result, int) for result in results) == 1
+    assert len(list_cooking_sessions(db)) == 1

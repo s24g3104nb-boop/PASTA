@@ -8,7 +8,10 @@ from pathlib import Path
 from uuid import uuid4
 from PIL import Image
 import numpy as np
-from pasta_vision import finite_nonnegative
+try:
+    from .pasta_vision import finite_nonnegative
+except ImportError:
+    from pasta_vision import finite_nonnegative
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('PASTA_DATA_DIR', str(BASE_DIR / 'data'))).resolve()

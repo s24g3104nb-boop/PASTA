@@ -18,3 +18,7 @@ __pycache__/
 **/models/*.pt
 **/models/*.pth
 **/models/*.onnx
+**/models/
+**/training/images/
+**/training/jobs/
+*.test-used.json

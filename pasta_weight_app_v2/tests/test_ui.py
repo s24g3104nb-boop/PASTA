@@ -42,5 +42,8 @@ assert rows[0]['estimator'] == 'opencv'
 at.selectbox(key='cooking_measurement').set_value(rows[0]['id']).run()
 assert not at.exception, at.exception
 assert any('CGまたはデモ' in w.value for w in at.warning)
+at.radio(key='estimate_method').set_value('学習モデル（実験用回帰）').run()
+assert not at.exception, at.exception
+assert any('有効なモデルがありません' in w.value for w in at.warning)
 print('UI smoke passed: spread/bundle, manual reset, save, cooking selection and demo warning')
 '''

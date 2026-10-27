@@ -10,12 +10,14 @@ from PIL import Image
 
 from .dataset import dataset_hash, grouping, image_rgb, validate_splits
 
-FEATURE_VERSION = 'rgb-hsv-yellow-grid-v1'
+FEATURE_VERSION = 'rgb-hsv-yellow-grid-v2'
 MODEL_VERSION = 'numpy-ridge-v1'
 
 
 def features(rgb):
-    rgb = np.asarray(Image.fromarray(rgb).resize((128, 128)))
+    image = Image.fromarray(rgb)
+    image.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
+    rgb = np.asarray(image.resize((128, 128)))
     hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
     yellow = cv2.inRange(hsv, np.array([7, 20, 60]), np.array([45, 255, 255])) / 255
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
