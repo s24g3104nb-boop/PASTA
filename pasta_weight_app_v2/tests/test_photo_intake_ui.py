@@ -82,6 +82,32 @@ def test_preview_can_be_inspected_but_not_approved_or_trained(tmp_path):
     assert at.button(key='intake_promote_1').disabled
 
 
+def test_preview_review_requires_explicit_variant_confirmation_and_no_training(tmp_path):
+    import zipfile
+    from photo_intake import merge_zip,list_intake
+    db=tmp_path/'preview_review.sqlite3';root=tmp_path/'Pasta_Lens_42_Photos'
+    create_pending_manifest(root)
+    image=io.BytesIO();Image.new('RGB',(80,80),(190,150,50)).save(image,'JPEG')
+    archive=io.BytesIO()
+    with zipfile.ZipFile(archive,'w') as z: z.writestr('A_CANDIDATE/IMG_7231.jpeg',image.getvalue())
+    merge_zip(archive.getvalue(),root)
+    at=AppTest.from_string(renderer(db)).run(timeout=15)
+    at.selectbox(key='intake_selected_photo').set_value(1).run(timeout=15)
+    next(b for b in at.button if b.label=='仮マスクを生成・修正内容を反映').click().run(timeout=15)
+    at.text_input(key='intake_review_by_1').set_value('fixture reviewer')
+    at.checkbox(key='intake_shape_confirmed_1').check()
+    at.checkbox(key='intake_leakage_confirmed_1').check()
+    next(b for b in at.button if b.label=='プレビュー版マスクを検品済みとして保存').click().run(timeout=15)
+    assert any('プレビュー版として' in e.value for e in at.error)
+    assert list_intake(db)[0]['qc_status']=='UNREVIEWED'
+    at.checkbox(key='intake_preview_confirm_1').check()
+    next(b for b in at.button if b.label=='プレビュー版マスクを検品済みとして保存').click().run(timeout=15)
+    assert not at.exception
+    assert list_intake(db)[0]['qc_status']=='APPROVED'
+    assert at.button(key='intake_promote_1').disabled
+    assert not list_intake(db)[0]['weight_verified']
+
+
 def test_42_metadata_only_rows_stay_pending_with_blank_weight(tmp_path):
     db = tmp_path / 'pending.sqlite3'
     create_pending_manifest(tmp_path / 'Pasta_Lens_42_Photos')

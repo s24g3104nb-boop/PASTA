@@ -410,15 +410,26 @@ def set_photo_mode(photo_id, mode, db_path=DEFAULT_DB):
         _audit(con, photo_id, 'capture_mode_confirmed', dict(mode=mode))
 
 
+def _review_source(row, variant):
+    if variant == 'original':
+        return load_original(row), row['expected_sha256']
+    if variant == 'preview':
+        rgb = load_preview(row)
+        path = Path(row['package_root']) / 'dataset/previews' / _safe_name(row['filename'])
+        return rgb, hashlib.sha256(path.read_bytes()).hexdigest()
+    raise ValueError('検品する画像の種類が不正です。')
+
+
 def save_review(photo_id, mask, *, excluded_rects=(), reviewer, shape_confirmed,
-                leakage_checked, notes='', db_path=DEFAULT_DB):
+                leakage_checked, notes='', db_path=DEFAULT_DB, source_variant='original',
+                processing_context=None):
     if (shape_confirmed is not True or leakage_checked is not True or
             not isinstance(reviewer, str) or not reviewer.strip()):
         raise ValueError('麺の形状・漏洩領域の確認と検品者の記録が必要です。')
     row = _photo(photo_id, db_path)
     if row['training_sample_id'] is not None:
         raise ValueError('学習登録済みの検品結果は上書きしません。')
-    rgb = load_original(row)
+    rgb, source_sha = _review_source(row,source_variant)
     clean = apply_mask_edits(mask, excluded_rects=excluded_rects)
     if clean.shape != rgb.shape[:2] or not np.array_equal(clean, mask) or not clean.any():
         raise ValueError('マスク寸法・二値性・秤除外領域・前景を確認してください。')
@@ -427,8 +438,8 @@ def save_review(photo_id, mask, *, excluded_rects=(), reviewer, shape_confirmed,
     digest = hashlib.sha256(png.getvalue()).hexdigest()
     directory = Path(row['package_root']) / 'dataset/preprocessing_reviewed'
     directory.mkdir(parents=True, exist_ok=True)
-    mask_path = directory / f'{photo_id}_{digest}_mask.png'
-    processed_path = directory / f'{photo_id}_{digest}_foreground.png'
+    mask_path = directory / f'{photo_id}_{source_sha[:16]}_{digest}_mask.png'
+    processed_path = directory / f'{photo_id}_{source_sha[:16]}_{digest}_foreground.png'
     if mask_path.exists() and mask_path.read_bytes() != png.getvalue():
         raise ValueError('保存済み検品マスクが変更されています。上書きしません。')
     if not mask_path.exists():
@@ -436,12 +447,15 @@ def save_review(photo_id, mask, *, excluded_rects=(), reviewer, shape_confirmed,
     if not processed_path.exists():
         Image.fromarray(composite_rgb(rgb, clean)).save(processed_path, 'PNG')
     details = dict(reviewer=str(reviewer).strip(), notes=notes, excluded_rects=excluded_rects,
-                   shape_confirmed=True, leakage_checked=True, original_sha256=row['expected_sha256'])
+                   shape_confirmed=True, leakage_checked=True, original_sha256=row['expected_sha256'],
+                   source_variant=source_variant,source_sha256=source_sha,
+                   processing_context=processing_context or {},source_shape=list(rgb.shape[:2]))
+    serialized = json.dumps(details,ensure_ascii=False,allow_nan=False)
     with _connection(db_path) as con:
         con.execute('''UPDATE photo_intake SET qc_status='APPROVED',leakage_checked=1,
             mask_path=?,mask_sha256=?,processed_path=?,reviewed_original_sha256=?,review_json=? WHERE id=?''',
-            (str(mask_path), digest, str(processed_path), row['expected_sha256'],
-             json.dumps(details, ensure_ascii=False), photo_id))
+            (str(mask_path), digest, str(processed_path), source_sha,
+             serialized, photo_id))
         _audit(con, photo_id, 'mask_and_leakage_reviewed', details)
 
 
@@ -456,14 +470,17 @@ def promote_photo(photo_id, db_path=DEFAULT_DB):
         raise ValueError('撮影状態を写真ごとに確認してください。')
     if row['qc_status'] != 'APPROVED' or not row['leakage_checked']:
         raise ValueError('マスク検品・秤表示などの漏洩確認が未完了です。')
-    rgb = load_original(row)
+    review = json.loads(row['review_json'] or '{}')
+    variant = review.get('source_variant','original')
+    rgb, source_sha = _review_source(row,variant)
     mask_path = Path(row['mask_path'])
     expected_root = Path(row['package_root']).resolve() / 'dataset/preprocessing_reviewed'
     if not mask_path.resolve().is_relative_to(expected_root) or mask_path.is_symlink():
         raise ValueError('検品マスクの保存先が不正です。')
     content = mask_path.read_bytes()
     if (hashlib.sha256(content).hexdigest() != row['mask_sha256']
-            or row['reviewed_original_sha256'] != row['expected_sha256']):
+            or row['reviewed_original_sha256'] != source_sha
+            or review.get('source_sha256',source_sha) != source_sha):
         raise ValueError('検品後の原写真またはマスクが変更されています。')
     try:
         from .photo_qc import validate_uploaded_mask
@@ -476,7 +493,7 @@ def promote_photo(photo_id, db_path=DEFAULT_DB):
     metadata = json.loads(row['metadata_json'])
     ident = register_sample(output.getvalue(), dict(actual_weight_g=weight, mode=row['mode'],
         source='real', product_id=row['product_id'], batch_id=row['batch_id'], session_id=row['session_id'],
-        notes=f"受領台帳ID {photo_id} / 原写真SHA256 {row['expected_sha256']} / 検品マスク {row['mask_sha256']}",
+        notes=f"受領台帳ID {photo_id} / source_variant={variant} / 受領SHA256 {source_sha} / 原写真参照SHA256 {row['expected_sha256']} / 検品マスク {row['mask_sha256']}",
         thickness_mm=metadata.get('diameter_mm') or None), db_path=db_path)
     with _connection(db_path) as con:
         con.execute('UPDATE photo_intake SET training_sample_id=? WHERE id=?', (ident, photo_id))

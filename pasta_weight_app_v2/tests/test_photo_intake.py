@@ -210,3 +210,33 @@ def test_preview_zip_is_separate_from_verified_original_and_never_auto_ready(int
         save_review(row['id'], np.full((80,80),255,dtype=np.uint8), reviewer='fixture',
                     shape_confirmed=True, leakage_checked=True, db_path=db)
     assert list_samples(db) == []
+
+
+def test_explicit_preview_review_keeps_provenance_and_label_gate(intake):
+    from photo_intake import load_preview
+    root,db,photos=intake
+    merge_zip(archive_bytes({'A_CANDIDATE/photo_0.jpeg':photos[0]}),root)
+    row=list_intake(db)[0]
+    mask=np.zeros((80,80),np.uint8); mask[10:70,10:70]=255
+    save_review(row['id'],mask,reviewer='fixture',shape_confirmed=True,leakage_checked=True,
+                source_variant='preview',processing_context={'coordinate_basis':'fixture-verified'},db_path=db)
+    with pytest.raises(ValueError,match='未確認'): promote_photo(row['id'],db)
+    confirm_fixture(root,db); set_photo_mode(row['id'],'spread',db)
+    ident=promote_photo(row['id'],db)
+    sample=list_samples(db)[0]
+    assert sample['id']==ident and 'source_variant=preview' in sample['notes']
+    review=json.loads(list_intake(db)[0]['review_json'])
+    assert review['source_variant']=='preview' and review['source_shape']==[80,80]
+    assert review['processing_context']['coordinate_basis']=='fixture-verified'
+
+
+def test_reviewed_preview_modified_after_review_cannot_promote(intake):
+    root,db,photos=intake
+    merge_zip(archive_bytes({'A_CANDIDATE/photo_0.jpeg':photos[0]}),root)
+    row=list_intake(db)[0]
+    confirm_fixture(root,db);set_photo_mode(row['id'],'spread',db)
+    save_review(row['id'],np.full((80,80),255,np.uint8),reviewer='fixture',shape_confirmed=True,
+                leakage_checked=True,source_variant='preview',db_path=db)
+    (root/'dataset/previews/photo_0.jpeg').write_bytes(photos[1])
+    with pytest.raises(ValueError,match='ハッシュ'): promote_photo(row['id'],db)
+    assert list_samples(db)==[]

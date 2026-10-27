@@ -19,6 +19,7 @@ try:
                                reassign_photo, save_review, set_photo_mode)
     from .photo_qc import (apply_mask_edits, composite_rgb, make_overlay, propose_mask,
                            validate_uploaded_mask)
+    from .preprocessing import propose_conservative_mask, audit_mask
 except ImportError:
     from storage import DEFAULT_DB, init_db, list_products
     from photo_intake import (add_original, confirm_group, list_intake, load_manifest,
@@ -26,6 +27,7 @@ except ImportError:
                               reassign_photo, save_review, set_photo_mode)
     from photo_qc import (apply_mask_edits, composite_rgb, make_overlay, propose_mask,
                           validate_uploaded_mask)
+    from preprocessing import propose_conservative_mask, audit_mask
 
 
 ERRORS = (OSError, ValueError, TypeError, sqlite3.Error)
@@ -76,6 +78,9 @@ def render_photo_intake(db_path=DEFAULT_DB):
     st.write(f'台帳: {len(rows)}枚 ／ 重量確認済み: '
              f"{sum(_verified(row.get('weight_verified')) for row in rows)}枚 ／ "
              f"学習登録済み: {sum(row.get('training_sample_id') is not None for row in rows)}枚")
+    verified = [r for r in rows if _verified(r.get('weight_verified')) and _verified(r.get('group_verified'))]
+    st.caption(f"確認済み計量バッチ: {len({r['batch_id'] for r in verified})} ／ "
+               f"確認済み撮影セッション: {len({r['session_id'] for r in verified})}。枚数と独立した試料数は異なります。")
     table = [{key: row.get(key) for key in
               ('filename', 'capture_group_id', 'weight_g', 'weight_verified', 'group_verified',
                'batch_id', 'session_id', 'mode', 'qc_status', 'leakage_checked', 'training_sample_id')}
@@ -218,7 +223,7 @@ def _render_photo(row, db_path):
         try:
             rgb = load_preview(row)
             preview_only = True
-            st.warning('受領済みプレビューを表示しています。原本SHA-256とは別の画像です。仮マスクの試行のみ行い、原本として承認・学習登録しません。')
+            st.warning('受領済みプレビューを表示しています。原本SHA-256とは別の画像です。検品する場合はプレビュー版として明示確認し、原本とは区別して保存します。')
         except ERRORS:
             st.info(f'この写真の検証済み原本をまだ読み込めません。元JPEGが必要です: {exc}')
             return
@@ -226,7 +231,29 @@ def _render_photo(row, db_path):
                'ROI・マスクはこの画素座標で指定し、画像サイズは変更しません。')
     digest = hashlib.sha256(rgb.tobytes()).hexdigest()
     candidate_key = f'intake_candidate_{ident}_{digest}'
-    _render_candidate_editor(row, rgb, candidate_key)
+    prepared = None
+    prepared_file = Path(row['package_root'])/'dataset/preview_qc_v2/manifest.json'
+    if prepared_file.exists():
+        prepared = json.loads(prepared_file.read_text()).get(row['filename'])
+        if prepared and prepared.get('source_rgb_sha256') == digest and prepared.get('status') == 'UNREVIEWED':
+            try:
+                path = Path(row['package_root'])/prepared['paths']['masks']
+                if not path.resolve().is_relative_to(Path(row['package_root']).resolve()):
+                    raise ValueError('検品候補のパスが不正です。')
+                if hashlib.sha256(path.read_bytes()).hexdigest() != prepared['mask_sha256']:
+                    raise ValueError('生成後の候補マスクが変更されています。')
+                if candidate_key not in st.session_state:
+                    st.session_state[candidate_key] = dict(mask=validate_uploaded_mask(path,rgb.shape[:2]),
+                        excluded_rects=[],warnings=prepared['warnings'],
+                        processing_context=dict(transform=prepared['transform'],reference=prepared['reference'],method='prepared-v2'))
+                st.caption(f"ROI変換: {prepared['transform']['reference_size']} → {prepared['transform']['target_size']} / {prepared['reference']['basis']}")
+                if not prepared['reference']['confirmed']:
+                    st.warning('ROIの座標基準は未確認です。変換候補の位置と麺の先端を目視確認してください。')
+            except ERRORS as exc:
+                st.error(f'保存した候補を読み込めません: {exc}')
+        else:
+            prepared = None
+    _render_candidate_editor(row, rgb, candidate_key,prepared=prepared)
     candidate = st.session_state.get(candidate_key)
     if candidate is None and row.get('mask_path'):
         try:
@@ -240,15 +267,18 @@ def _render_photo(row, db_path):
     first, second, third = st.columns(3)
     first.image(rgb, caption='プレビュー・検品用' if preview_only else '元画像・EXIF正規化', width='stretch')
     if mask is not None:
-        second.image(mask, caption='候補マスク・白が保持対象', width='stretch')
-        third.image(make_overlay(rgb, mask), caption='検品用オーバーレイ', width='stretch')
+        second.image(composite_rgb(rgb, mask), caption='加工後・原画素を保持', width='stretch')
+        third.image(mask, caption='抽出マスク・白が保持対象', width='stretch')
         with st.expander('背景処理候補・注意事項'):
-            st.image(composite_rgb(rgb, mask), caption='原画素を保持した背景処理候補', width='stretch')
+            st.image(make_overlay(rgb,mask), caption='境界確認用オーバーレイ',width='stretch')
+            audit = audit_mask(rgb,mask,forbidden_rects=candidate.get('excluded_rects',[]))
+            st.write('除外領域の残存画素:',audit['forbidden_foreground_pixels'])
+            if not audit['forbidden_regions_supplied']:
+                st.caption('除外矩形は未指定です。秤数字・小物・文字の漏洩がないかを別途確認してください。')
             st.caption(f'保持画素: {np.count_nonzero(mask)} / {mask.size}。画素数は重量・本数の真値ではありません。')
             for warning in candidate.get('warnings', []):
                 st.warning(warning)
-        if not preview_only:
-            _render_review(row, candidate, db_path)
+        _render_review(row, candidate, db_path,preview_only=preview_only)
     else:
         second.info('まだ候補マスクがありません。')
         third.info('仮マスクを生成するか、修正済み二値PNGを読み込んでください。')
@@ -259,7 +289,8 @@ def _render_photo(row, db_path):
         candidate_approved = hashlib.sha256(encoded.getvalue()).hexdigest() == row.get('mask_sha256')
         if not candidate_approved:
             st.info('表示中の候補はまだ承認されていません。変更後のマスクを検品して保存してください。')
-    ready = (not preview_only and candidate_approved and _verified(row.get('weight_verified')) and _verified(row.get('group_verified'))
+    review_variant = json.loads(row.get('review_json') or '{}').get('source_variant','original')
+    ready = (review_variant == ('preview' if preview_only else 'original') and candidate_approved and _verified(row.get('weight_verified')) and _verified(row.get('group_verified'))
              and row.get('qc_status') == 'APPROVED' and _verified(row.get('leakage_checked'))
              and bool(row.get('mode')) and bool(row.get('product_id')))
     if row.get('training_sample_id') is not None:
@@ -274,14 +305,16 @@ def _render_photo(row, db_path):
                 st.error(f'学習候補へ登録できません: {exc}')
 
 
-def _render_candidate_editor(row, rgb, candidate_key):
+def _render_candidate_editor(row, rgb, candidate_key,prepared=None):
     ident = row['id']
-    full_roi = json.dumps([0, 0, rgb.shape[1], rgb.shape[0]])
+    full_roi = json.dumps(prepared['transform']['roi_xyxy'] if prepared else [0, 0, rgb.shape[1], rgb.shape[0]])
     review = json.loads(row.get('review_json') or '{}')
     with st.expander('仮マスクを作成・修正する', expanded=True):
         st.caption('色抽出は仮の候補です。自動の膨張・穴埋めはせず、手動ポリゴンで追加・消去します。'
                    '秤表示などの除外矩形は最後に適用します。矩形xyxyは右端・下端を含まない座標です。')
         with st.form(f'intake_candidate_form_{ident}'):
+            method = st.selectbox('候補作成方式',['従来のHSV候補','支持領域で背景を抑える候補'],key=f'intake_method_{ident}')
+            support = st.text_area('支持ポリゴン（任意・背景を抑える方式用、[[x,y],...]）',value='',key=f'intake_support_{ident}')
             roi = st.text_input('候補抽出ROI [x1,y1,x2,y2]', value=full_roi, key=f'intake_roi_{ident}')
             exclusions = st.text_area('秤表示などの除外矩形 [[x1,y1,x2,y2],...]',
                                       value=json.dumps(review.get('excluded_rects', [])),
@@ -307,6 +340,11 @@ def _render_candidate_editor(row, rgb, candidate_key):
                 if uploaded is not None:
                     mask = validate_uploaded_mask(uploaded, rgb.shape[:2])
                     notes = ['アップロードしたマスクです。ROIで切り抜かず、手動修正と除外矩形のみ適用します。']
+                elif method.startswith('支持'):
+                    proposed = propose_conservative_mask(rgb,_json(roi,'ROI'),excluded_rects=rectangles,
+                        support_polygon=_json(support,'支持ポリゴン') if support.strip() else None,
+                        min_saturation=int(saturation),min_value=int(brightness))
+                    mask,notes=proposed['mask'],proposed['warnings']
                 else:
                     proposed = propose_mask(rgb, roi=_json(roi, 'ROI'), excluded_rects=rectangles,
                                             hue_min=int(hue_min), hue_max=int(hue_max),
@@ -314,7 +352,8 @@ def _render_candidate_editor(row, rgb, candidate_key):
                     mask, notes = proposed['mask'], proposed['warnings']
                 mask = apply_mask_edits(mask, _json(additions, '追加ポリゴン'),
                                        _json(erasures, '消去ポリゴン'), excluded_rects=rectangles)
-                st.session_state[candidate_key] = dict(mask=mask, excluded_rects=rectangles, warnings=notes)
+                st.session_state[candidate_key] = dict(mask=mask, excluded_rects=rectangles, warnings=notes,
+                    processing_context=dict(roi_xyxy=_json(roi,'ROI'),method='uploaded-mask' if uploaded else method))
                 st.session_state.pop(f'intake_shape_confirmed_{ident}', None)
                 st.session_state.pop(f'intake_leakage_confirmed_{ident}', None)
                 st.success('未検品の候補を作成しました。下の元画像・マスク・オーバーレイで確認してください。')
@@ -322,21 +361,27 @@ def _render_candidate_editor(row, rgb, candidate_key):
                 st.error(f'候補を作成できません: {exc}')
 
 
-def _render_review(row, candidate, db_path):
+def _render_review(row, candidate, db_path,preview_only=False):
     ident = row['id']
     with st.form(f'intake_review_form_{ident}'):
+        variant_confirmed = not preview_only
+        if preview_only:
+            variant_confirmed = st.checkbox('原本ではなく、受領ハッシュで識別したプレビュー版の検品として保存します',key=f'intake_preview_confirm_{ident}')
         reviewer = st.text_input('検品した人・確認記録', key=f'intake_review_by_{ident}')
         notes = st.text_area('欠落・混入の確認と修正内容', key=f'intake_review_notes_{ident}')
-        shape = st.checkbox('元画像と比較し、麺の先端・形状・本数の見え方を損なわず、背景混入もないと確認しました',
+        shape = st.checkbox('加工前と比較し、麺の先端・形状・本数の見え方を損なわず、背景混入もないと確認しました',
                              key=f'intake_shape_confirmed_{ident}')
         leakage = st.checkbox('秤の数字など重量が分かる領域がマスク内に残っていないことを確認しました',
                                key=f'intake_leakage_confirmed_{ident}')
-        approve = st.form_submit_button('このマスクを検品済みとして保存')
+        approve = st.form_submit_button('プレビュー版マスクを検品済みとして保存' if preview_only else 'このマスクを検品済みとして保存')
     if approve:
         try:
+            if not variant_confirmed:
+                raise ValueError('プレビュー版としての検品であることを確認してください。')
             save_review(ident, candidate['mask'], excluded_rects=candidate.get('excluded_rects', []),
                         reviewer=reviewer, shape_confirmed=shape, leakage_checked=leakage,
-                        notes=notes, db_path=db_path)
+                        notes=notes, db_path=db_path,source_variant='preview' if preview_only else 'original',
+                        processing_context=candidate.get('processing_context'))
             _refresh('検品内容を保存しました。重量等の確認後、別ボタンで学習候補へ登録できます。')
         except ERRORS as exc:
             st.error(f'検品済みとして保存できません: {exc}')
