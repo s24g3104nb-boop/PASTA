@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 from PIL import Image
 import numpy as np
+from pasta_vision import finite_nonnegative
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / 'data'
+DATA_DIR = Path(os.environ.get('PASTA_DATA_DIR', str(BASE_DIR / 'data'))).resolve()
 DEFAULT_DB = DATA_DIR / 'measurements.sqlite3'
 
 
@@ -48,6 +50,15 @@ def init_db(db_path=DEFAULT_DB):
                 image_filename TEXT
             );
         ''')
+        existing = {r['name'] for r in con.execute('PRAGMA table_info(measurements)')}
+        additions = {
+            'source_kind': "TEXT NOT NULL DEFAULT 'unknown'",
+            'estimator': "TEXT NOT NULL DEFAULT 'opencv'",
+            **{key: 'REAL' for key in ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')},
+        }
+        for name, declaration in additions.items():
+            if name not in existing:
+                con.execute(f'ALTER TABLE measurements ADD COLUMN {name} {declaration}')
         con.execute('''
             INSERT OR IGNORE INTO products
                 (name, g_per_strand, kcal_100, protein_100, fat_100, carb_100)
@@ -64,8 +75,8 @@ def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
                  *, product_id=None, db_path=DEFAULT_DB):
     if not name.strip():
         raise ValueError('商品名を入力してください。')
-    if any(v < 0 for v in (g_per_strand, kcal_100, protein_100, fat_100, carb_100)):
-        raise ValueError('重量・栄養情報に負数は使用できません。')
+    for v in (g_per_strand, kcal_100, protein_100, fat_100, carb_100):
+        finite_nonnegative(v, '重量・栄養情報')
     with _connect(db_path) as con:
         if product_id is None:
             con.execute('''INSERT INTO products
@@ -80,25 +91,45 @@ def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
 
 
 def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_g,
-                     nutrition, image_rgb, db_path=DEFAULT_DB):
+                     nutrition, image_rgb, db_path=DEFAULT_DB, source_kind='unknown',
+                     estimator='opencv', product_snapshot=None):
     # 履歴はローカル保存。Web公開環境での複数人利用には認証が必要。
+    if source_kind not in {'unknown', 'real', 'synthetic'}:
+        raise ValueError('画像の由来が不正です。')
+    if not product_name.strip() or not mode.strip():
+        raise ValueError('製品名と撮影状態が必要です。')
+    if finite_nonnegative(detected_count, '本数') != int(detected_count):
+        raise ValueError('本数は整数にしてください。')
+    finite_nonnegative(estimated_g, '推定重量')
+    if actual_g is not None:
+        if finite_nonnegative(actual_g, '実測重量') <= 0:
+            raise ValueError('実測重量は正数にしてください。')
+    for k in ('kcal', 'protein_g', 'fat_g', 'carb_g'):
+        finite_nonnegative(nutrition[k], k)
+    snapshot_keys = ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')
+    snapshot = [finite_nonnegative(product_snapshot[k], k) if product_snapshot else None
+                for k in snapshot_keys]
+    rgb = np.asarray(image_rgb)
+    if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3 or not rgb.size:
+        raise ValueError('保存画像はRGB uint8形式にしてください。')
     db_path = Path(db_path)
     photo_dir = db_path.parent / 'photos'
     photo_dir.mkdir(parents=True, exist_ok=True)
     filename = f'{uuid4().hex}.jpg'
-    Image.fromarray(np.asarray(image_rgb, dtype=np.uint8)).save(photo_dir / filename,
-                                                               'JPEG', quality=82)
     try:
+        Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
         with _connect(db_path) as con:
-            con.execute('''
+            cursor = con.execute('''
                 INSERT INTO measurements (created_at, product_name, mode, detected_count,
-                estimated_g, actual_g, kcal, protein_g, fat_g, carb_g, image_filename)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                estimated_g, actual_g, kcal, protein_g, fat_g, carb_g, image_filename,
+                source_kind, estimator, g_per_strand, kcal_100, protein_100, fat_100, carb_100)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), product_name, mode,
                   int(detected_count), float(estimated_g),
                   (float(actual_g) if actual_g is not None else None),
                   nutrition['kcal'], nutrition['protein_g'], nutrition['fat_g'],
-                  nutrition['carb_g'], filename))
+                  nutrition['carb_g'], filename, source_kind, estimator, *snapshot))
+            return cursor.lastrowid
     except Exception:
         (photo_dir / filename).unlink(missing_ok=True)
         raise

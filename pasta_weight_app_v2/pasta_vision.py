@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+from pathlib import Path
 from typing import List
 
 import cv2
@@ -23,16 +25,55 @@ class DetectionResult:
 
 def image_to_rgb(file_or_image, max_side: int = 1400) -> np.ndarray:
     """EXIFの向きを補正してスマホ画像をRGB配列にする。"""
+    if not isinstance(max_side, int) or max_side <= 0:
+        raise ValueError('max_side は正の整数にしてください。')
+    if isinstance(file_or_image, (str, Path)):
+        size = Path(file_or_image).stat().st_size
+    elif hasattr(file_or_image, 'getbuffer'):
+        size = file_or_image.getbuffer().nbytes
+    else:
+        size = None
+    if size is not None and size > 25 * 1024 * 1024:
+        raise ValueError('画像は25MiB以下にしてください。')
     if isinstance(file_or_image, Image.Image):
         pil = file_or_image
     else:
         pil = Image.open(file_or_image)
-    pil = ImageOps.exif_transpose(pil).convert('RGB')
-    pil.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-    return np.asarray(pil)
+    original = pil
+    try:
+        if pil.width * pil.height > 25_000_000:
+            raise ValueError('画像は2500万画素以下にしてください。')
+        pil = ImageOps.exif_transpose(pil)
+        pil.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        if 'A' in pil.getbands() or 'transparency' in pil.info:
+            rgba = pil.convert('RGBA')
+            background = Image.new('RGBA', rgba.size, (255, 255, 255, 255))
+            pil = Image.alpha_composite(background, rgba)
+        return np.asarray(pil.convert('RGB'))
+    finally:
+        if isinstance(file_or_image, (str, Path)):
+            original.close()
+
+
+def finite_nonnegative(value, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f'{name} は数値にしてください。')
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{name} は0以上の有限値にしてください。') from None
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f'{name} は0以上の有限値にしてください。')
+    return number
 
 
 def _yellow_mask(rgb: np.ndarray, saturation_min: int, value_min: int) -> np.ndarray:
+    if (not isinstance(rgb, np.ndarray) or rgb.dtype != np.uint8
+            or rgb.ndim != 3 or rgb.shape[2] != 3 or min(rgb.shape[:2]) < 2):
+        raise ValueError('2×2画素以上のRGB uint8画像が必要です。')
+    if not all(0 <= finite_nonnegative(v, '色閾値') <= 255
+               for v in (saturation_min, value_min)):
+        raise ValueError('色閾値は0〜255にしてください。')
     hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
     # 黄色〜クリーム色の麺（赤いソース・食品には非対応）。
     low = np.array([7, saturation_min, value_min], dtype=np.uint8)
@@ -50,6 +91,8 @@ def detect_spread(
     min_elongation: float = 3.0,
 ) -> DetectionResult:
     """広げた麺が互いに接していないとき、独立した細長い領域を数える。"""
+    if finite_nonnegative(min_area, '最小面積') <= 0 or finite_nonnegative(min_elongation, '細長さ') < 1:
+        raise ValueError('最小面積は正数、細長さは1以上にしてください。')
     mask = _yellow_mask(rgb, saturation_min, value_min)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     overlay = rgb.copy()
@@ -98,6 +141,9 @@ def detect_bundle_ends(
     端面がすべて手前に向いている写真に限る。実画像の精度は未検証。
     """
     overlay = rgb.copy()
+    if any(finite_nonnegative(v, '円検出パラメータ') <= 0 for v in
+           (min_radius, max_radius, min_distance, hough_sensitivity)):
+        raise ValueError('円検出パラメータは正数にしてください。')
     if min_radius >= max_radius:
         raise ValueError("min_radius は max_radius より小さくしてください")
     mask = _yellow_mask(rgb, saturation_min, value_min)
@@ -133,10 +179,15 @@ def detect_bundle_ends(
 
 def nutrition_for_weight(weight_g: float, kcal_100: float, protein_100: float,
                          fat_100: float, carb_100: float) -> dict:
-    scale = max(0.0, weight_g) / 100.0
-    return {
+    scale = finite_nonnegative(weight_g, '重量') / 100.0
+    kcal_100, protein_100, fat_100, carb_100 = (
+        finite_nonnegative(v, '栄養値') for v in (kcal_100, protein_100, fat_100, carb_100))
+    result = {
         "kcal": round(kcal_100 * scale, 1),
         "protein_g": round(protein_100 * scale, 1),
         "fat_g": round(fat_100 * scale, 1),
         "carb_g": round(carb_100 * scale, 1),
     }
+    for key, value in result.items():
+        finite_nonnegative(value, key)
+    return result

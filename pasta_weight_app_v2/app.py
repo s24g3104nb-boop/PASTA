@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
+import hashlib
 
 import pandas as pd
 from PIL import Image
@@ -12,11 +13,14 @@ from generate_demo import generate_images
 from pasta_vision import detect_bundle_ends, detect_spread, image_to_rgb, nutrition_for_weight
 from storage import (DATA_DIR, init_db, list_measurements, list_products,
                      save_measurement, save_product)
+from cooking_ui import render_cooking_tab
 
 BASE_DIR = Path(__file__).resolve().parent
 st.set_page_config(page_title='Pasta Lens | 乾麺量推定', page_icon='🍝', layout='centered')
 init_db()
-generate_images()
+if not all((BASE_DIR / 'sample_images' / name).is_file()
+           for name in ('demo_spread_12.png', 'demo_bundle_16.png')):
+    generate_images()
 
 st.markdown('''<style>
 .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 850px;}
@@ -26,11 +30,11 @@ div[data-testid="stMetric"] {border: 1px solid #d8d8d8; padding: 12px; border-ra
 
 st.title('🍝 Pasta Lens')
 st.caption('乾麺の写真から本数を数えて、重量と栄養を推定するプロトタイプ')
-st.info('現在は **OpenCVを使う試作** です。AI学習はまだ行っていません。'
-        '実物写真での精度は未検証です。まずサンプル画像で操作を試せます。', icon='ℹ️')
+st.info('画面の乾麺推定は **OpenCVを使う試作** です。実写モデルはまだ学習していません。'
+        '学習・評価CLIは別途用意しています。実物写真での精度は未検証です。', icon='ℹ️')
 
-measure_tab, history_tab, product_tab, guide_tab = st.tabs(
-    ['📷 重量を推定', '🕒 測定履歴', '📦 パスタデータ', '❓ 使い方'])
+measure_tab, history_tab, product_tab, cooking_tab, guide_tab = st.tabs(
+    ['📷 重量を推定', '🕒 測定履歴', '📦 パスタデータ', '🍳 料理と栄養', '❓ 使い方'])
 
 with measure_tab:
     st.subheader('1. 撮影状態を選択')
@@ -86,6 +90,11 @@ with measure_tab:
     else:
         try:
             rgb = image_to_rgb(photo)
+            input_key = hashlib.sha256(rgb.tobytes()).hexdigest() + mode + str(p_id) + source_kind
+            if st.session_state.get('measurement_input') != input_key:
+                for key in ('override_count', 'manual_count', 'actual_known'):
+                    st.session_state.pop(key, None)
+                st.session_state['measurement_input'] = input_key
             if mode == '広げた状態':
                 # expander は閉じていてもStreamlitウィジェットが作られる。
                 result = detect_spread(rgb, saturation_min=sat, value_min=val,
@@ -99,9 +108,9 @@ with measure_tab:
             st.error(f'画像を解析できませんでした。画像形式または設定を確認してください。詳細: {exc}')
         else:
             st.image(result.overlay_rgb, caption='検出箇所：赤枠 / 赤丸',
-                     use_container_width=True)
+                     width='stretch')
             with st.expander('色抽出マスクを表示'):
-                st.image(result.mask, caption='白い部分が検出対象', use_container_width=True)
+                st.image(result.mask, caption='白い部分が検出対象', width='stretch')
             st.metric(result.description, f'{result.count} 個')
             for msg in result.warnings:
                 st.caption('⚠️ ' + msg)
@@ -143,11 +152,17 @@ with measure_tab:
                                              value=50.0, step=0.1)
                     st.write(f'絶対誤差：**{abs(weight - actual):.1f} g**'
                              f' ／ 誤差率：**{abs(weight - actual) / actual * 100:.1f}%**')
-                if st.button('💾 この測定結果を保存', type='primary', use_container_width=True):
-                    save_measurement(product_name=product['name'], mode=mode,
-                                     detected_count=detected_count, estimated_g=weight,
-                                     actual_g=actual, nutrition=nutrit, image_rgb=rgb)
-                    st.success('測定履歴に保存しました。上部の「測定履歴」から確認できます。')
+                if st.button('💾 この測定結果を保存', type='primary', width='stretch'):
+                    try:
+                        save_measurement(product_name=product['name'], mode=mode,
+                                         detected_count=detected_count, estimated_g=weight,
+                                         actual_g=actual, nutrition=nutrit, image_rgb=rgb,
+                                         source_kind='synthetic' if using_demo else 'real',
+                                         estimator='manual_count' if override else 'opencv',
+                                         product_snapshot=product)
+                        st.success('測定履歴に保存しました。上部の「測定履歴」から確認できます。')
+                    except (OSError, ValueError, sqlite3.Error) as exc:
+                        st.error(f'保存できませんでした。保存先と入力を確認してください: {exc}')
                 st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
                            '電子はかりで確認してください。')
 
@@ -167,7 +182,7 @@ with history_tab:
             'estimated_g': '推定g', 'actual_g': '実測g', 'kcal': 'kcal',
         })
         st.dataframe(shown[['ID', '日時', '製品', '撮影状態', '本数', '推定g', '実測g', '誤差(g)', 'kcal']],
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width='stretch')
         measured = frame.dropna(subset=['actual_g'])
         if len(measured):
             error = (measured['estimated_g'] - measured['actual_g']).abs().mean()
@@ -177,7 +192,7 @@ with history_tab:
         path = DATA_DIR / 'photos' / (entry['image_filename'] or '')
         if path.is_file():
             st.image(str(path), caption=f"{entry['created_at']} / {entry['mode']}",
-                     use_container_width=True)
+                     width='stretch')
 
 with product_tab:
     st.subheader('製品データの登録・更新')
@@ -190,10 +205,10 @@ with product_tab:
                             format_func=lambda p: '＋ 新しい製品を登録' if p == 0
                             else mapping[p]['name'], key='product_edit_mode')
     current = mapping.get(selected, {})
+    calibrate = st.checkbox('数えた本数と総重量から1本の重量を計算する', value=False)
     with st.form('product_editor'):
         name = st.text_input('製品名', value=current.get('name', ''),
                              placeholder='例：〇〇スパゲッティ 1.6mm')
-        calibrate = st.checkbox('数えた本数と総重量から1本の重量を計算する', value=False)
         if calibrate:
             calib_n = st.number_input('校正で数えた本数', min_value=1, value=50, step=1)
             calib_w = st.number_input('その本数の実測重量（g）', min_value=0.0, value=0.0, step=0.1)
@@ -223,6 +238,9 @@ with product_tab:
         except (sqlite3.IntegrityError, ValueError) as err:
             st.error(f'保存できませんでした（商品名の重複や入力値をご確認ください）：{err}')
 
+with cooking_tab:
+    render_cooking_tab()
+
 with guide_tab:
     st.subheader('準備するもの')
     st.markdown('''
@@ -237,7 +255,8 @@ with guide_tab:
     **基準物：** 定規や硬貨は不要。ただし、製品ごとの1本当たりの重量は事前の実測が必要です。
 
     **実装状況：** 写真入力、OpenCV検出、重量・栄養計算、商品登録、履歴保存。
-    束はHough変換で円を検出する試験段階。**AIの学習機能・料理画像の解析は未実装**です。
+    束はHough変換で円を検出する試験段階。乾麺の学習・評価はCLIで実行できます。
+    料理名の画像分類器は未学習です。料理タブでは手動選択と材料入力で栄養を計算します。
 
     **データの取扱い：** 保存した写真・履歴は、このPythonアプリを動かしているPCの
     `data/`フォルダに置かれます。認証機能がないため、インターネットに一般公開しないでください。

@@ -1,0 +1,53 @@
+"""Streamlit上で材料編集から料理保存までの契約を確認する。"""
+import json
+from pathlib import Path
+import sqlite3
+
+from streamlit.testing.v1 import AppTest
+
+
+def test_material_entry_and_600_kcal_portion_saved_in_ui(tmp_path):
+    app_dir = str(Path(__file__).resolve().parents[1])
+    db = str(tmp_path / 'cooking_ui.sqlite3')
+    script = f'''
+import sys
+sys.path.insert(0, {app_dir!r})
+import numpy as np
+from storage import init_db, list_measurements, save_measurement
+from cooking_ui import render_cooking_tab
+db = {db!r}
+init_db(db)
+if not list_measurements(db):
+    save_measurement(product_name='デモ用UIテスト', mode='spread', detected_count=100,
+        estimated_g=100, actual_g=100,
+        nutrition={{'kcal':350,'protein_g':12,'fat_g':2,'carb_g':70}},
+        image_rgb=np.zeros((10,10,3), dtype=np.uint8), db_path=db)
+render_cooking_tab(db)
+'''
+    at = AppTest.from_string(script).run(timeout=15)
+    assert not at.exception
+    assert at.selectbox[0].value is None
+    at.selectbox[0].set_value(1).run(timeout=15)
+    assert not at.exception
+    rows = [
+        {'name': '卵', 'amount_g': 50, 'kcal_100': 140, 'protein_100': 10, 'fat_100': 8, 'carb_100': 0},
+        {'name': 'ベーコン', 'amount_g': 25, 'kcal_100': 400, 'protein_100': 20, 'fat_100': 30, 'carb_100': 0},
+        {'name': 'チーズ', 'amount_g': 20, 'kcal_100': 400, 'protein_100': 30, 'fat_100': 30, 'carb_100': 0},
+    ]
+    # AppTestはdata_editorの直接編集APIを持たないため、同じウィジェット編集状態を与える。
+    at.session_state['cooking_ingredients_1'] = {
+        'edited_rows': {}, 'added_rows': rows, 'deleted_rows': []}
+    at.checkbox[0].check()
+    at.checkbox[1].check()
+    at.number_input[0].set_value(2)
+    at.button[0].click().run(timeout=15)
+    assert not at.exception
+    assert not at.error
+    assert any('保存しました' in item.value for item in at.success)
+    with sqlite3.connect(db) as con:
+        serialized = con.execute('SELECT calculation_json FROM cooking_sessions').fetchone()[0]
+    result = json.loads(serialized)
+    assert result['total']['kcal'] == 600
+    assert result['portion']['kcal'] == 300
+    assert any('保存結果はCG／デモ製品' in item.value for item in at.warning)
+    assert any('実測重量' in item.value and '100.00g' in item.value for item in at.caption)
