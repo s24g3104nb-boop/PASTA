@@ -55,6 +55,7 @@ def init_db(db_path=DEFAULT_DB):
         ''')
         existing = {r['name'] for r in con.execute('PRAGMA table_info(measurements)')}
         additions = {
+            'archived': 'INTEGER NOT NULL DEFAULT 0',
             'source_kind': "TEXT NOT NULL DEFAULT 'unknown'",
             'estimator': "TEXT NOT NULL DEFAULT 'opencv'",
             **{key: 'REAL' for key in ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')},
@@ -152,4 +153,4 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
 def list_measurements(db_path=DEFAULT_DB):
     with _connect(db_path) as con:
         return [dict(row) for row in con.execute(
-            'SELECT * FROM measurements ORDER BY id DESC')]
+            'SELECT * FROM measurements WHERE archived=0 ORDER BY id DESC')]

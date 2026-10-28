@@ -11,17 +11,19 @@ from cooking_storage import (delete_recipe_template, list_cooking_sessions, list
                              save_cooking_session, save_recipe_template)
 from dish_classifier import DISH_NAMES, INGREDIENT_HINTS, UntrainedDishClassifier
 from storage import DEFAULT_DB, list_measurements
+from ingredient_ui import render_ingredients
 
 
 def render_cooking_tab(db_path=DEFAULT_DB):
-    st.subheader('完成料理の材料・カロリー')
+    st.subheader('まず、乾麺の記録を選ぼう')
     st.warning('写真から材料の使用量や正確な総カロリーは分かりません。'
                '使った乾麺の履歴と、ソース・油・具材・調味料の実際の使用量を確認してください。')
-    st.caption(UntrainedDishClassifier().predict().message)
+    with st.expander('写真認識と計算について'):
+        st.caption(UntrainedDishClassifier().predict().message)
     st.caption('完成料理の重量を予測する機能ではありません。料理名の選択だけでは材料量は決まりません。')
     measurements = list_measurements(db_path)
     if not measurements:
-        st.info('先に「重量を推定」タブで、この料理に使用する乾麺の測定結果を保存してください。')
+        st.info('先にホームで、この料理に使用する乾麺の測定結果を保存してください。')
         return
     mapping = {item['id']: item for item in measurements}
     measurement_id = st.selectbox(
@@ -78,17 +80,22 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     initial_frame = pd.DataFrame(initial_rows) if initial_rows else pd.DataFrame({
         'name': pd.Series(dtype='str'), **{key: pd.Series(dtype='float64')
         for key in ('amount_g', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')}})
+    st.subheader('使った食材と、食べる分量')
+    input_style=st.selectbox('食材の入力方法',['食材ごとに入力','表でまとめて入力'],key='ingredient_input_style')
+    if input_style=='食材ごとに入力':
+        frame=render_ingredients(initial_rows,editor_key)
     with st.form(f'cooking_editor_{measurement_id}'):
-        frame = st.data_editor(
-            initial_frame, num_rows='dynamic', hide_index=True, key=editor_key,
-            column_config={
-                'name': st.column_config.TextColumn('材料名', required=True),
-                'amount_g': st.column_config.NumberColumn('使用量(g)', min_value=0.0, required=True),
-                'kcal_100': st.column_config.NumberColumn('kcal/100g', min_value=0.0, required=True),
-                'protein_100': st.column_config.NumberColumn('P(g)/100g', min_value=0.0, required=True),
-                'fat_100': st.column_config.NumberColumn('F(g)/100g', min_value=0.0, required=True),
-                'carb_100': st.column_config.NumberColumn('C(g)/100g', min_value=0.0, required=True),
-            })
+        if input_style=='表でまとめて入力':
+            frame = st.data_editor(
+                initial_frame, num_rows='dynamic', hide_index=True, key=editor_key,
+                column_config={
+                    'name': st.column_config.TextColumn('材料名', required=True),
+                    'amount_g': st.column_config.NumberColumn('使用量(g)', min_value=0.0, required=True),
+                    'kcal_100': st.column_config.NumberColumn('kcal/100g', min_value=0.0, required=True),
+                    'protein_100': st.column_config.NumberColumn('P(g)/100g', min_value=0.0, required=True),
+                    'fat_100': st.column_config.NumberColumn('F(g)/100g', min_value=0.0, required=True),
+                    'carb_100': st.column_config.NumberColumn('C(g)/100g', min_value=0.0, required=True),
+                })
         complete = st.checkbox('使った追加材料・ソース・油・調味料をすべて入力しました（未入力分は合計に含まれません）')
         template_confirmed = True
         if template:
@@ -102,13 +109,14 @@ def render_cooking_tab(db_path=DEFAULT_DB):
                                          min_value=0.001, max_value=1.0, value=1.0, step=0.05)
         save = st.form_submit_button('入力を確認して計算・保存', disabled=bool(used_sessions))
         st.caption('この材料入力を再利用したい場合は、分量と出典をレシピテンプレートとして登録できます。')
-        template_name = st.text_input('登録するテンプレート名')
-        template_source = st.text_input('材料・栄養値の出典、分量の前提')
-        reference_dry_g = st.number_input('この入力材料に対応する基準乾麺g', min_value=0.1,
-                                           value=float(snapshot['dry_weight_g']), step=0.1)
-        reference_servings = st.number_input('テンプレートの基準人数', min_value=1,
-                                              value=template['default_servings'] if template else 1, step=1)
-        register_template = st.form_submit_button('入力材料をレシピテンプレートとして登録')
+        with st.expander('この材料をレシピとして登録（任意）'):
+            template_name = st.text_input('登録するテンプレート名')
+            template_source = st.text_input('材料・栄養値の出典、分量の前提')
+            reference_dry_g = st.number_input('この入力材料に対応する基準乾麺g', min_value=0.1,
+                                               value=float(snapshot['dry_weight_g']), step=0.1)
+            reference_servings = st.number_input('テンプレートの基準人数', min_value=1,
+                                                  value=template['default_servings'] if template else 1, step=1)
+            register_template = st.form_submit_button('入力材料をレシピテンプレートとして登録')
     if register_template:
         try:
             save_recipe_template(name=template_name, selected_dish=selected_dish,
@@ -169,6 +177,11 @@ def render_cooking_tab(db_path=DEFAULT_DB):
 
 
 def _show_result(result):
+    with st.container(border=True):
+        st.metric('食べる分のカロリー', f"{result['portion']['kcal']:.0f} kcal")
+        columns=st.columns(3)
+        for column,label,key in zip(columns,['たんぱく質','脂質','炭水化物'],['protein_g','fat_g','carb_g']):
+            column.metric(label,f"{result['portion'][key]:.1f} g")
     if result.get('nutrition_basis') == 'template_estimate':
         st.warning('利用者登録レシピに基づく概算です。今回の材料使用量を完全に実測した値ではありません。')
         template = result.get('recipe_template', {})
@@ -185,3 +198,28 @@ def _show_result(result):
          'C(g)': round(result[key]['carb_g'], 1)} for key, label in labels.items()
     ]), hide_index=True)
     st.caption(f"食べる割合: {result['consumed_fraction']:.3f}。{result['assumptions']}")
+
+
+def render_cooking_page(db_path=DEFAULT_DB):
+    section=st.selectbox('料理メニュー',['料理を作る','保存した料理・レシピ'],key='cooking_section')
+    if section=='料理を作る':
+        render_cooking_tab(db_path)
+        return
+    from ui_shell import empty_state
+    sessions=list_cooking_sessions(db_path)
+    templates=list_recipe_templates(db_path)
+    if not sessions and not templates:
+        empty_state('いつものひと皿を保存しよう','乾麺と食材を入力して、料理やレシピを保存できます。')
+    for session in sessions:
+        with st.container(border=True):
+            st.subheader(session['selected_dish'])
+            st.caption(session['created_at'])
+            if session['dry_snapshot'].get('source_kind')!='real':st.caption('CG・デモ / 来歴未確認の計算')
+            with st.expander('栄養と計算の内訳'):_show_result(session['calculation'])
+    for template in templates:
+        with st.container(border=True):
+            st.subheader(template['name'])
+            st.caption(f"{template['selected_dish']} · 基準乾麺 {template['reference_dry_g']:g} g")
+            st.caption(template['source'])
+            with st.expander('材料を確認'):
+                for item in template['ingredients']:st.write(f"{item['name']} · {item['amount_g']:g} g")

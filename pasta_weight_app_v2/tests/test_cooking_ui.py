@@ -34,6 +34,7 @@ render_cooking_tab(db)
         {'name': 'ベーコン', 'amount_g': 25, 'kcal_100': 400, 'protein_100': 20, 'fat_100': 30, 'carb_100': 0},
         {'name': 'チーズ', 'amount_g': 20, 'kcal_100': 400, 'protein_100': 30, 'fat_100': 30, 'carb_100': 0},
     ]
+    at.selectbox(key='ingredient_input_style').set_value('表でまとめて入力').run(timeout=15)
     # AppTestはdata_editorの直接編集APIを持たないため、同じウィジェット編集状態を与える。
     at.session_state['cooking_ingredients_1'] = {
         'edited_rows': {}, 'added_rows': rows, 'deleted_rows': []}
@@ -83,6 +84,7 @@ render_cooking_tab(db)
     at.selectbox[0].set_value(1).run(timeout=15)
     at.selectbox[2].set_value(1).run(timeout=15)
     assert not at.exception
+    at.selectbox(key='ingredient_input_style').set_value('表でまとめて入力').run(timeout=15)
     assert at.number_input[0].value == 2
     at.checkbox[0].check()
     at.checkbox[1].check()

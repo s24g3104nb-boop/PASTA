@@ -86,7 +86,7 @@ def render_training_tab(db_path=DEFAULT_DB):
         st.write('受領写真の学習前点検:',{k:ready[k] for k in ('confirmed_labels','tentative_or_unconfirmed','qc_approved','eligible_images','verified_independent_groups')})
         for reason in ready['blocking_reasons']:st.info(reason)
     products = list_products(db_path)
-    with st.expander('写真と実測重量を登録', expanded=True):
+    with st.expander('写真と実測重量を登録', expanded=False):
         with st.form('training_register'):
             image = st.file_uploader('乾麺の写真（JPEG / PNG）', type=['jpg', 'jpeg', 'png'], key='training_upload')
             metadata = _fields('training_new', products)

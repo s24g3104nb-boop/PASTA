@@ -12,19 +12,20 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     nutrit = nutrition_for_weight(weight, product['kcal_100'],
                                   product['protein_100'],
                                   product['fat_100'], product['carb_100'])
-    st.subheader('重量と栄養')
+    st.subheader('あなたのパスタ')
+    with st.container(key='weight_hero'):
+        st.metric('推定重量', f'{weight:.1f} g')
+    st.metric('カロリー', f'{nutrit["kcal"]:.1f} kcal')
+    with st.container(key='nutrition_cards'):
+        c1,c2,c3=st.columns(3)
+        c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
+        c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
+        c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
     st.caption(f'使用方式: {estimator}')
-    c1, c2 = st.columns(2)
-    c1.metric('推定重量', f'{weight:.1f} g')
-    c2.metric('推定カロリー', f'{nutrit["kcal"]:.1f} kcal')
-    c3, c4, c5 = st.columns(3)
-    c3.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
-    c4.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
-    c5.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
     st.caption(explanation + ' 栄養値は乾麺のみで、ソースは含みません。')
     st.caption('推定の信頼性: CGテスト用' if using_demo else
                '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
-    has_actual = st.checkbox('実際にはかりで測った重量が分かる',
+    has_actual = st.checkbox('重量を修正・実測値を登録する',
                              key='actual_known')
     actual = None
     if has_actual:
@@ -32,7 +33,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                                  value=50.0, step=0.1)
         st.write(f'絶対誤差：**{abs(weight - actual):.1f} g**'
                  f' ／ 誤差率：**{abs(weight - actual) / actual * 100:.1f}%**')
-    if st.button('💾 この測定結果を保存', type='primary', width='stretch'):
+    if st.button('履歴に保存', type='primary', width='stretch'):
         try:
             save_measurement(product_name=product['name'], mode=mode,
                              detected_count=detected_count, estimated_g=weight,
@@ -40,14 +41,17 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                              source_kind='synthetic' if using_demo else 'real',
                              estimator=estimator,
                              product_snapshot=product, db_path=db_path,diagnostics=diagnostics)
-            st.success('測定履歴に保存しました。上部の「測定履歴」から確認できます。')
+            st.success('測定履歴に保存しました。下の「履歴」から確認できます。')
         except (OSError, ValueError, sqlite3.Error) as exc:
             st.error(f'保存できませんでした。保存先と入力を確認してください: {exc}')
+    if 'capture_source' in st.session_state:
+        from ui_shell import start_capture
+        st.button('もう一度撮影', on_click=start_capture, args=('スマホで撮影',), key='result_retake', width='stretch')
     st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
                '電子はかりで確認してください。')
 
 
-def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_path=DEFAULT_DB):
+def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_path=DEFAULT_DB, show_image=True):
     if using_demo or active['artifact']['source'] != 'real':
         st.warning('実写モデルの測定には実物の写真を使用してください。CGは精度評価に使えません。')
         return
@@ -62,7 +66,8 @@ def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_
         st.warning('このモデルは検品済み前景専用です。未処理の撮影画像には適用できません。AI学習管理で前処理を確認してください。')
         return
     prediction = predict(active['artifact'], rgb, canonical_mode, str(product['id']))
-    st.image(rgb, caption='回帰モデルへの入力画像', width='stretch')
+    if show_image:
+        st.image(rgb, caption='回帰モデルへの入力画像', width='stretch')
     if not prediction['success']:
         st.warning(prediction['reason'] + ' 再撮影するか、対応する製品・モードの学習データを増やしてください。')
         return

@@ -23,17 +23,24 @@ from streamlit.testing.v1 import AppTest
 
 at = AppTest.from_file(str(Path(os.environ['PASTA_APP_DIR']) / 'app.py'), default_timeout=15).run()
 assert not at.exception, at.exception
+at.button(key='home_demo').click().run()
+assert not at.metric
+at.button(key='analyze_photo').click().run()
 assert at.metric[0].value == '12 個'
 at.checkbox(key='override_count').check().run()
 at.number_input(key='manual_count').set_value(99).run()
 assert any(m.value == '99.0 g' for m in at.metric)
-at.radio[0].set_value('束の断面').run()
+at.button(key='edit_capture').click().run()
+at.selectbox(key='capture_mode').set_value('束の断面').run()
+assert not at.metric
+at.button(key='analyze_photo').click().run()
 assert not at.exception, at.exception
 assert at.metric[0].value == '16 個'
 assert not at.checkbox(key='override_count').value
 assert any(m.value == '16.0 g' for m in at.metric)
-next(b for b in at.button if b.label == '💾 この測定結果を保存').click().run()
+next(b for b in at.button if b.label == '履歴に保存').click().run()
 assert not at.exception, at.exception
+at.radio(key='main_nav').set_value('料理・栄養').run()
 assert at.selectbox(key='cooking_measurement').options[0] == '履歴を選択してください'
 from storage import list_measurements
 rows = list_measurements()
@@ -42,8 +49,11 @@ assert rows[0]['estimator'] == 'opencv'
 at.selectbox(key='cooking_measurement').set_value(rows[0]['id']).run()
 assert not at.exception, at.exception
 assert any('CGまたはデモ' in w.value for w in at.warning)
+at.radio(key='main_nav').set_value('ホーム').run()
+at.button(key='edit_capture').click().run()
 at.radio(key='estimate_method').set_value('学習モデル（実験用回帰）').run()
 assert not at.exception, at.exception
+at.button(key='analyze_photo').click().run()
 assert any('有効なモデルがありません' in w.value for w in at.warning)
 print('UI smoke passed: spread/bundle, manual reset, save, cooking selection and demo warning')
 '''
