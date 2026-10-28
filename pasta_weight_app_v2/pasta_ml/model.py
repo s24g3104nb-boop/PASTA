@@ -52,6 +52,9 @@ def train(samples, output, alpha=1., allow_synthetic=False):
     if output.exists():
         raise ValueError('モデルを上書きしません。新しいモデルバージョンのパスを指定してください')
     train_rows = [s for s in samples if s.values['split'] == 'train']
+    contracts={'reviewed_foreground' if '検品マスク' in s.values.get('notes','') else 'raw' for s in samples}
+    if len(contracts)!=1:
+        raise ValueError('背景処理済み画像と未処理画像を同じ実験に混在させません。前処理を統一してください。')
     entries = {}
     for pair in sorted({s.pair for s in train_rows}):
         subset = [s for s in train_rows if s.pair == pair]
@@ -75,6 +78,7 @@ def train(samples, output, alpha=1., allow_synthetic=False):
                  experimental=True, alpha=alpha, dataset_sha256=dataset_hash(samples),
                  training_data_hash=dataset_hash(train_rows), entries=entries,
                  note='実験用CPU回帰。未見製品・撮影条件・範囲外重量の精度は保証しません。')
+    model['input_contract']=next(iter(contracts))
     model['reproducibility']=dict(seed=42,python=platform.python_version(),
         dependencies={name:version(name) for name in ('numpy','Pillow','opencv-python-headless')},
         hyperparameters=dict(alpha=alpha),split_policy='session/batch/physical/pixel/perceptual union groups',
@@ -131,7 +135,9 @@ def _validate_model(model):
     return model
 
 
-def predict(model, rgb, mode, product_id):
+def predict(model, rgb, mode, product_id, *, input_kind="raw"):
+    if model.get("input_contract", "raw") != input_kind:
+        return dict(success=False, predicted_g=None, reason="学習時と測定時の前処理が一致しません。検品した前景画像と対応モデルを使用してください。")
     mode = 'bundle_end' if mode == 'bundle' else mode
     e = model['entries'].get(mode + ':' + product_id)
     if e is None:

@@ -4,14 +4,16 @@ import streamlit as st
 from pasta_vision import nutrition_for_weight
 from storage import DEFAULT_DB, save_measurement
 from pasta_ml.model import predict
+from measurement_diagnostics import trace
 
 
 def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_count,
-                         estimator, explanation, db_path=DEFAULT_DB):
+                         estimator, explanation, db_path=DEFAULT_DB, diagnostics=None):
     nutrit = nutrition_for_weight(weight, product['kcal_100'],
                                   product['protein_100'],
                                   product['fat_100'], product['carb_100'])
-    st.subheader('5. 推定結果')
+    st.subheader('重量と栄養')
+    st.caption(f'使用方式: {estimator}')
     c1, c2 = st.columns(2)
     c1.metric('推定重量', f'{weight:.1f} g')
     c2.metric('推定カロリー', f'{nutrit["kcal"]:.1f} kcal')
@@ -37,7 +39,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                              actual_g=actual, nutrition=nutrit, image_rgb=rgb,
                              source_kind='synthetic' if using_demo else 'real',
                              estimator=estimator,
-                             product_snapshot=product, db_path=db_path)
+                             product_snapshot=product, db_path=db_path,diagnostics=diagnostics)
             st.success('測定履歴に保存しました。上部の「測定履歴」から確認できます。')
         except (OSError, ValueError, sqlite3.Error) as exc:
             st.error(f'保存できませんでした。保存先と入力を確認してください: {exc}')
@@ -56,6 +58,9 @@ def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_
     if canonical_mode is None:
         st.warning('撮影状態を確認してください。未知の状態を断面として扱いません。')
         return
+    if active['artifact'].get('input_contract')=='reviewed_foreground':
+        st.warning('このモデルは検品済み前景専用です。未処理の撮影画像には適用できません。AI学習管理で前処理を確認してください。')
+        return
     prediction = predict(active['artifact'], rgb, canonical_mode, str(product['id']))
     st.image(rgb, caption='回帰モデルへの入力画像', width='stretch')
     if not prediction['success']:
@@ -64,4 +69,4 @@ def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_
     render_weight_result(weight=prediction['predicted_g'], product=product, rgb=rgb, mode=mode,
                          using_demo=False, detected_count=0, estimator=f"ridge:{active['id']}",
                          explanation=f"モデルID {active['id']} による連続重量の推定です。本数は計数していません。",
-                         db_path=db_path)
+                         db_path=db_path,diagnostics=trace(rgb,estimator=f"ridge:{active['id']}",product=product,mode=mode,model=active))

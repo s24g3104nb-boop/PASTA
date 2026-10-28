@@ -29,13 +29,13 @@ def summary(rows):
     result = dict(total=len(rows), succeeded=len(ok), failed=len(rows) - len(ok),
                   success_rate=len(ok) / len(rows) if rows else None,
                   failure_rate=(len(rows)-len(ok))/len(rows) if rows else None,
-                  mae_g=None, rmse_g=None, mape_percent=None, median_absolute_error_g=None, bias_g=None)
+                  mae_g=None, rmse_g=None, mape_percent=None, median_absolute_error_g=None, max_absolute_error_g=None, bias_g=None)
     if ok:
         errors = np.array([r['predicted_g'] - r['actual_weight_g'] for r in ok])
         actual = np.array([r['actual_weight_g'] for r in ok])
         result.update(mae_g=float(np.abs(errors).mean()), rmse_g=float(np.sqrt((errors ** 2).mean())),
                       mape_percent=float((np.abs(errors) / actual).mean() * 100),
-                      median_absolute_error_g=float(np.median(np.abs(errors))), bias_g=float(errors.mean()))
+                      median_absolute_error_g=float(np.median(np.abs(errors))), max_absolute_error_g=float(np.abs(errors).max()), bias_g=float(errors.mean()))
     return result
 
 
@@ -54,7 +54,8 @@ def evaluate(samples, split, *, model=None, calibrations=None, allow_synthetic=F
         rgb = image_rgb(s.path)
         started=time.perf_counter()
         if model is not None:
-            prediction = predict(model, rgb, s.values['mode'], s.values['product_id'])
+            prediction = predict(model, rgb, s.values['mode'], s.values['product_id'],
+                                 input_kind='reviewed_foreground' if '検品マスク' in s.values.get('notes','') else 'raw')
         elif s.values['mode'] == 'bundle_side':
             prediction = dict(success=False, predicted_g=None,
                               reason='束の側面・上面はOpenCV断面検出の適用外です。対応する回帰モデルと実測写真で評価してください')

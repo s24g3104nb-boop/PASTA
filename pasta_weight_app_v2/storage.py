@@ -95,7 +95,7 @@ def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
 
 def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_g,
                      nutrition, image_rgb, db_path=DEFAULT_DB, source_kind='unknown',
-                     estimator='opencv', product_snapshot=None):
+                     estimator='opencv', product_snapshot=None, diagnostics=None):
     # 履歴はローカル保存。Web公開環境での複数人利用には認証が必要。
     if source_kind not in {'unknown', 'real', 'synthetic'}:
         raise ValueError('画像の由来が不正です。')
@@ -119,7 +119,13 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
     photo_dir = db_path.parent / 'photos'
     photo_dir.mkdir(parents=True, exist_ok=True)
     filename = f'{uuid4().hex}.jpg'
+    exact_filename=filename.removesuffix('.jpg')+'.png'
+    if diagnostics is not None:
+        import json
+        diagnostics=dict(diagnostics,inference_image_filename=exact_filename)
+        serialized=json.dumps(diagnostics,ensure_ascii=False,allow_nan=False)
     try:
+        if diagnostics is not None:Image.fromarray(rgb).save(photo_dir/exact_filename,'PNG')
         Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
         with _connect(db_path) as con:
             cursor = con.execute('''
@@ -132,9 +138,14 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
                   (float(actual_g) if actual_g is not None else None),
                   nutrition['kcal'], nutrition['protein_g'], nutrition['fat_g'],
                   nutrition['carb_g'], filename, source_kind, estimator, *snapshot))
-            return cursor.lastrowid
+            ident=cursor.lastrowid
+            if diagnostics is not None:
+                con.execute('CREATE TABLE IF NOT EXISTS measurement_diagnostics (measurement_id INTEGER PRIMARY KEY REFERENCES measurements(id),details_json TEXT NOT NULL)')
+                con.execute('INSERT INTO measurement_diagnostics VALUES (?,?)',(ident,serialized))
+            return ident
     except Exception:
         (photo_dir / filename).unlink(missing_ok=True)
+        if diagnostics is not None:(photo_dir/exact_filename).unlink(missing_ok=True)
         raise
 
 

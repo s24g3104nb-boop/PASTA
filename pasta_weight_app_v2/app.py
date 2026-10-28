@@ -18,6 +18,7 @@ from training_ui import render_training_tab
 from training_manager import get_active_model
 from measurement_ui import render_weight_result, render_regression_measurement
 from pasta_vision import image_quality_warnings
+from measurement_diagnostics import weight_gate,trace
 
 BASE_DIR = Path(__file__).resolve().parent
 st.set_page_config(page_title='Pasta Lens | 乾麺量推定', page_icon='🍝', layout='centered')
@@ -161,7 +162,10 @@ with measure_tab:
                 else:
                     detected_count = result.count
 
-                if detected_count <= 0:
+                rejection=weight_gate(product,using_demo=using_demo,mode=mode,mask=result.mask,manual=override)
+                if rejection:
+                    st.warning(' '.join(rejection))
+                elif detected_count <= 0:
                     st.warning('本数が0のため推定できません。画像やパラメータを変更してください。')
                 elif product['g_per_strand'] <= 0:
                     st.warning('選択した製品の「1本あたりの重量」を登録すると推定できます。')
@@ -170,6 +174,10 @@ with measure_tab:
                     render_weight_result(weight=weight, product=product, rgb=rgb, mode=mode,
                                          using_demo=using_demo, detected_count=detected_count,
                                          estimator='manual_count' if override else 'opencv',
+                                         diagnostics=trace(rgb,estimator='manual_count' if override else 'opencv',product=product,mode=mode,
+                                             raw_sha256=hashlib.sha256(photo.getvalue()).hexdigest() if hasattr(photo,'getvalue') else None,
+                                             parameters=dict(automatic_count=result.count,used_count=detected_count,
+                                                 detection=(dict(saturation_min=sat,value_min=val,min_area=min_area,min_elongation=elongation) if mode=='広げた状態' else dict(min_radius=min_radius,max_radius=max_radius,min_distance=min_distance,hough_sensitivity=sensitivity)))),
                                          explanation=f'計算：{detected_count}本 × {product["g_per_strand"]:.4f}g/本 = {weight:.2f}g。')
 
 with history_tab:
