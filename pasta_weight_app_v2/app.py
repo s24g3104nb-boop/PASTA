@@ -179,6 +179,12 @@ with history_tab:
         st.info('まだ履歴がありません。「重量を推定」タブで結果を保存してください。')
     else:
         frame = pd.DataFrame(rows)
+        search = st.text_input('履歴を検索（製品・日時・方式）', key='history_search')
+        if search.strip():
+            searchable=frame[['product_name','created_at','estimator']].fillna('').astype(str).agg(' '.join,axis=1)
+            frame=frame[searchable.str.contains(search.strip(),case=False,regex=False)]
+        if frame.empty:
+            st.info('検索条件に一致する履歴はありません。')
         frame['誤差(g)'] = frame.apply(
             lambda row: round(abs(row['estimated_g'] - row['actual_g']), 2)
             if pd.notna(row['actual_g']) else None, axis=1)
@@ -200,9 +206,9 @@ with history_tab:
                 MAPE_percent=('absolute_percentage_error', 'mean')).reset_index(), hide_index=True)
             st.caption('保存された推定成功分の参考値です。学習モデルの評価は独立した写真で行ってください。')
         chosen = st.selectbox('写真を確認する履歴ID', options=frame['id'].tolist())
-        entry = next(r for r in rows if r['id'] == chosen)
-        path = DATA_DIR / 'photos' / (entry['image_filename'] or '')
-        if path.is_file():
+        entry = next((r for r in rows if r['id'] == chosen),{})
+        path = DATA_DIR / 'photos' / (entry.get('image_filename') or '')
+        if entry and path.is_file():
             st.image(str(path), caption=f"{entry['created_at']} / {entry['mode']}",
                      width='stretch')
 

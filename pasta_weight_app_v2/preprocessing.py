@@ -143,3 +143,34 @@ def background_controls(rgb,mask):
     background_only[mask>0] = 24
     return dict(foreground_dark=composite_rgb(rgb,mask),
                 foreground_gray=composite_rgb(rgb,mask,bg=(128,128,128)),background_only=background_only)
+
+
+def propose_lab_mask(rgb, roi, *, excluded_rects=()):
+    """Labの黄色成分による比較候補。形態学処理・最大領域だけの選別はしない。"""
+    rgb=_rgb(rgb); h,w=rgb.shape[:2]
+    x1,y1,x2,y2=_rect(roi,(h,w))
+    lab=cv2.cvtColor(rgb,cv2.COLOR_RGB2LAB)
+    color=cv2.inRange(lab,(25,105,143),(255,165,255))
+    mask=np.zeros((h,w),np.uint8);mask[y1:y2,x1:x2]=color[y1:y2,x1:x2]
+    for left,top,right,bottom in _rects(excluded_rects,(h,w)): mask[top:bottom,left:right]=0
+    return dict(mask=mask,status='UNREVIEWED',warnings=['Lab色抽出の比較候補です。陰影の欠落・黄色い小物の混入を検品してください。'])
+
+
+def quality_flags(rgb,mask):
+    """検品の優先度を決める観測値。重なり・麺本数の正解や自動承認には使わない。"""
+    rgb,mask=_rgb(rgb),_mask(mask)
+    if rgb.shape[:2]!=mask.shape: raise ValueError('画像とマスクの寸法が一致しません。')
+    gray=cv2.cvtColor(rgb,cv2.COLOR_RGB2GRAY);selected=mask>0
+    flags=[]
+    if not selected.any(): flags.append('empty_foreground')
+    boundary=bool(mask[0].any() or mask[-1].any() or mask[:,0].any() or mask[:,-1].any())
+    if boundary:flags.append('subject_may_be_cut_off')
+    focus=float(cv2.Laplacian(gray,cv2.CV_64F)[selected].var()) if selected.any() else None
+    if focus is not None and focus<3:flags.append('possible_blur')
+    bright=float((gray[selected]>245).mean()) if selected.any() else None
+    if bright is not None and bright>.05:flags.append('possible_glare')
+    occupancy=float(selected.mean())
+    if occupancy>.65:flags.append('possible_background_contamination')
+    return dict(flags=flags,foreground_fraction=occupancy,foreground_laplacian_variance=focus,
+                bright_fraction=bright,touches_image_boundary=boundary,
+                status='UNREVIEWED',note='重なり・撮影角度・陰影・麺の欠落は人による検品が必要です。')

@@ -20,6 +20,8 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     c4.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
     c5.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
     st.caption(explanation + ' 栄養値は乾麺のみで、ソースは含みません。')
+    st.caption('推定の信頼性: CGテスト用' if using_demo else
+               '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
     has_actual = st.checkbox('実際にはかりで測った重量が分かる',
                              key='actual_known')
     actual = None

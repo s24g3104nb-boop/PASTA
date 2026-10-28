@@ -1,0 +1,28 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>マスク修正ブラシ</title>
+<style>body{margin:0;font:14px sans-serif}canvas{width:100%;touch-action:none;display:block}p{margin:4px}button,input{font:inherit}label{margin-right:8px}</style>
+<p>緑が保持領域です。指・マウスで線を描き、離すと修正を送信します。</p>
+<label><input id="erase" type="checkbox">消去</label><label>半径（元画像px）<input id="radius" type="number" min="1" max="100" value="5" style="width:60px"></label>
+<canvas id="canvas" aria-label="加工前画像と保持マスク。指またはマウスで修正する領域を描画"></canvas>
+<script>
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let args=null,points=[],drawing=false;
+function post(type,extra={}){window.parent.postMessage({isStreamlitMessage:true,type,...extra},'*')}
+function height(){post('streamlit:setFrameHeight',{height:document.body.scrollHeight+10})}
+window.addEventListener('message',async e=>{
+ if(e.source!==window.parent||e.data.type!=='streamlit:render')return;
+ args=e.data.args;const local=args;
+ const load=s=>new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=s});
+ try{const [im,mask]=await Promise.all([load(args.image),load(args.mask)]);if(local!==args)return;
+ canvas.width=im.width;canvas.height=im.height;ctx.drawImage(im,0,0);
+ const mc=document.createElement('canvas');mc.width=im.width;mc.height=im.height;
+ const mx=mc.getContext('2d');mx.drawImage(mask,0,0);const pix=mx.getImageData(0,0,im.width,im.height);
+ for(let i=0;i<pix.data.length;i+=4){let a=pix.data[i]>0?90:0;pix.data[i]=20;pix.data[i+1]=220;pix.data[i+2]=70;pix.data[i+3]=a}
+ mx.putImageData(pix,0,0);ctx.drawImage(mc,0,0);height();}catch(err){canvas.setAttribute('aria-label','画像を読み込めません');height()}
+});
+function point(e){const r=canvas.getBoundingClientRect();return [Math.max(0,Math.min(canvas.width-1,Math.round((e.clientX-r.left)*canvas.width/r.width))),Math.max(0,Math.min(canvas.height-1,Math.round((e.clientY-r.top)*canvas.height/r.height)))]}
+canvas.addEventListener('pointerdown',e=>{if(!args)return;canvas.setPointerCapture(e.pointerId);drawing=true;points=[point(e)]});
+canvas.addEventListener('pointermove',e=>{if(!drawing||points.length>=5000)return;let p=point(e),a=points[points.length-1];points.push(p);ctx.strokeStyle=document.getElementById('erase').checked?'#ff3377':'#20dd50';ctx.lineWidth=Number(document.getElementById('radius').value)*2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...p);ctx.stroke()});
+canvas.addEventListener('pointerup',e=>{if(!drawing)return;drawing=false;points.push(point(e));post('streamlit:setComponentValue',{value:{action_id:Date.now().toString()+Math.random(),revision:args.revision,points,radius:Number(document.getElementById('radius').value),erase:document.getElementById('erase').checked},dataType:'json'})});
+canvas.addEventListener('pointercancel',()=>{drawing=false;points=[]});
+new ResizeObserver(height).observe(canvas);post('streamlit:componentReady',{apiVersion:1});height();
+</script></html>

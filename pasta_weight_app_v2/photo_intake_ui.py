@@ -19,7 +19,8 @@ try:
                                reassign_photo, save_review, set_photo_mode)
     from .photo_qc import (apply_mask_edits, composite_rgb, make_overlay, propose_mask,
                            validate_uploaded_mask)
-    from .preprocessing import propose_conservative_mask, audit_mask
+    from .preprocessing import propose_conservative_mask, audit_mask,propose_lab_mask,quality_flags
+    from .qc_editor import put_candidate,history_step,brush_component,brush_edit
 except ImportError:
     from storage import DEFAULT_DB, init_db, list_products
     from photo_intake import (add_original, confirm_group, list_intake, load_manifest,
@@ -27,7 +28,8 @@ except ImportError:
                               reassign_photo, save_review, set_photo_mode)
     from photo_qc import (apply_mask_edits, composite_rgb, make_overlay, propose_mask,
                           validate_uploaded_mask)
-    from preprocessing import propose_conservative_mask, audit_mask
+    from preprocessing import propose_conservative_mask, audit_mask,propose_lab_mask,quality_flags
+    from qc_editor import put_candidate,history_step,brush_component,brush_edit
 
 
 ERRORS = (OSError, ValueError, TypeError, sqlite3.Error)
@@ -59,6 +61,7 @@ def render_photo_intake(db_path=DEFAULT_DB):
     st.caption('写真・マスク・重量確認表はローカルの同じPasta_Lens_42_Photosフォルダへ統合します。'
                'この段階では学習データへ登録せず、重量や麺の形を推測で確定しません。')
     _render_uploads(root, db_path)
+    _render_revision(root,db_path)
     manifest = root / 'dataset' / 'metadata' / 'labels_NEED_CONFIRMATION.csv'
     if not manifest.is_file():
         st.info('重量確認用マニフェストが未受信です。00番ZIPまたはメタデータを配置してから検査してください。')
@@ -81,18 +84,51 @@ def render_photo_intake(db_path=DEFAULT_DB):
     verified = [r for r in rows if _verified(r.get('weight_verified')) and _verified(r.get('group_verified'))]
     st.caption(f"確認済み計量バッチ: {len({r['batch_id'] for r in verified})} ／ "
                f"確認済み撮影セッション: {len({r['session_id'] for r in verified})}。枚数と独立した試料数は異なります。")
+    all_rows=rows
+    statuses = ['すべて','確定重量','候補重量','QC未承認','学習登録済み']
+    status = st.selectbox('写真台帳の絞り込み',statuses,key='intake_status_filter')
+    group = st.selectbox('撮影群の絞り込み',['すべて']+sorted({r['capture_group_id'] for r in rows}),key='intake_group_filter')
+    rows = [r for r in rows if (group=='すべて' or r['capture_group_id']==group) and (
+        status=='すべて' or status=='確定重量' and r['weight_verified'] or
+        status=='候補重量' and not r['weight_verified'] or status=='QC未承認' and r['qc_status']!='APPROVED' or
+        status=='学習登録済み' and r['training_sample_id'] is not None)]
     table = [{key: row.get(key) for key in
               ('filename', 'capture_group_id', 'weight_g', 'weight_verified', 'group_verified',
                'batch_id', 'session_id', 'mode', 'qc_status', 'leakage_checked', 'training_sample_id')}
              for row in rows]
     st.dataframe(pd.DataFrame(table), hide_index=True, width='stretch')
-    _render_group_confirmation(rows, root, db_path)
+    if not rows:
+        st.info('この条件に一致する写真はありません。')
+        return
+    _render_group_confirmation(all_rows, root, db_path)
     mapping = {row['id']: row for row in rows}
     selected = st.selectbox('検品・分類する写真', [None] + list(mapping),
                             format_func=lambda value: '写真を選択してください' if value is None
                             else mapping[value]['filename'], key='intake_selected_photo')
     if selected is not None:
         _render_photo(mapping[selected], db_path)
+
+
+def _render_revision(root,db_path):
+    private=root.parent/'Pasta_Lens_Private_Dataset'
+    manifest=private/'docs/ALL_58_PHOTO_MANIFEST.csv'
+    if not manifest.exists(): return
+    try:
+        from pasta_weight_app_v2.dataset_revision import revision_plan,apply_revision
+        with st.expander('最新CSVのラベル訂正・追加写真（差分確認）'):
+            plan=revision_plan(private,root,manifest,db_path)
+            inv=plan['inventory']
+            st.write(f"受領 {inv['received']} / {inv['expected']}、検証済み {inv['valid']}枚。")
+            st.caption('確定ラベルと候補を区別します。撮影・計量・物理試料の対応、画像QCは別途確認が必要です。')
+            st.dataframe(pd.DataFrame([dict(ID=c['image_id'],旧重量=(c['before'] or {}).get('weight_g'),
+                新重量=c['after']['weight_g'],確定=bool(c['after']['weight_verified']),変更=c['changed']) for c in plan['changes']]),hide_index=True)
+            st.code(plan['plan_sha256'],language=None)
+            if st.button('差分を保存しバックアップ後に最新ラベルを適用',key='intake_apply_revision',
+                         disabled=inv['valid']!=inv['expected'] or not any(c['changed'] for c in plan['changes'])):
+                result=apply_revision(private,root,manifest,plan['plan_sha256'],db_path)
+                _refresh(f"訂正を保存しました。{result['changed']}枚。学習は開始していません。")
+    except ERRORS as exc:
+        st.error(f'最新CSVの検査に失敗しました: {exc}')
 
 
 def _render_uploads(root, db_path):
@@ -167,6 +203,7 @@ def _render_group_confirmation(rows, root, db_path):
             batch_id = st.text_input('実際の秤量バッチID', key=f'intake_group_batch_{group_id}')
             session_id = st.text_input('実際の撮影セッションID', key=f'intake_group_session_{group_id}',
                                        help='別グループでも同じ撮影セッションなら同じIDにしてください。')
+            physical_id = st.text_input('実際の物理試料ID（同じ麺の再使用・追加なら共通ID）',key=f'intake_group_physical_{group_id}')
             product_id = st.selectbox('このグループの実製品', [None] + list(product_names),
                                        format_func=lambda key: '実製品を選択してください' if key is None
                                        else product_names[key], key=f'intake_group_product_{group_id}')
@@ -182,7 +219,7 @@ def _render_group_confirmation(rows, root, db_path):
                     raise ValueError('実製品を選択してください。')
                 confirm_group(root, group_id, weight, batch_id=batch_id, session_id=session_id,
                               product_id=product_id, confirmed_same_batch=same,
-                              confirmed_by=reviewer, db_path=db_path)
+                              confirmed_by=reviewer, db_path=db_path,physical_sample_id=physical_id)
                 _refresh('グループの実測重量と計量の対応を保存しました。学習はまだ開始していません。')
             except ERRORS as exc:
                 st.error(f'重量を確定できません: {exc}')
@@ -254,6 +291,7 @@ def _render_photo(row, db_path):
         else:
             prepared = None
     _render_candidate_editor(row, rgb, candidate_key,prepared=prepared)
+    _render_brush(rgb,candidate_key,ident)
     candidate = st.session_state.get(candidate_key)
     if candidate is None and row.get('mask_path'):
         try:
@@ -278,6 +316,20 @@ def _render_photo(row, db_path):
             st.caption(f'保持画素: {np.count_nonzero(mask)} / {mask.size}。画素数は重量・本数の真値ではありません。')
             for warning in candidate.get('warnings', []):
                 st.warning(warning)
+            st.write('自動検品フラグ（承認ではありません）',quality_flags(rgb,mask))
+        with st.expander('境界を拡大して比較・除外候補を確認'):
+            rect_text=st.text_input('拡大領域 [x1,y1,x2,y2]',value=json.dumps([0,0,min(600,rgb.shape[1]),min(600,rgb.shape[0])]),key=f'intake_zoom_{ident}')
+            try:
+                from pasta_weight_app_v2.photo_qc import _rect
+                x1,y1,x2,y2=_rect(_json(rect_text,'拡大領域'),mask.shape)
+                before,after=st.columns(2)
+                before.image(rgb[y1:y2,x1:x2],caption='元画素',width='stretch')
+                after.image(make_overlay(rgb,mask)[y1:y2,x1:x2],caption='境界拡大',width='stretch')
+                if prepared:
+                    lost=Path(row['package_root'])/prepared['paths']['lost_candidates']
+                    if lost.resolve().is_relative_to(Path(row['package_root']).resolve()):
+                        st.image(str(lost),caption='前処理方式間で除かれた色候補（正解マスクではありません）',width='stretch')
+            except ERRORS as exc:st.error(str(exc))
         _render_review(row, candidate, db_path,preview_only=preview_only)
     else:
         second.info('まだ候補マスクがありません。')
@@ -313,7 +365,7 @@ def _render_candidate_editor(row, rgb, candidate_key,prepared=None):
         st.caption('色抽出は仮の候補です。自動の膨張・穴埋めはせず、手動ポリゴンで追加・消去します。'
                    '秤表示などの除外矩形は最後に適用します。矩形xyxyは右端・下端を含まない座標です。')
         with st.form(f'intake_candidate_form_{ident}'):
-            method = st.selectbox('候補作成方式',['従来のHSV候補','支持領域で背景を抑える候補'],key=f'intake_method_{ident}')
+            method = st.selectbox('候補作成方式',['従来のHSV候補','支持領域で背景を抑える候補','Lab色空間の比較候補','現在の候補へ手動修正だけ適用'],key=f'intake_method_{ident}')
             support = st.text_area('支持ポリゴン（任意・背景を抑える方式用、[[x,y],...]）',value='',key=f'intake_support_{ident}')
             roi = st.text_input('候補抽出ROI [x1,y1,x2,y2]', value=full_roi, key=f'intake_roi_{ident}')
             exclusions = st.text_area('秤表示などの除外矩形 [[x1,y1,x2,y2],...]',
@@ -340,6 +392,12 @@ def _render_candidate_editor(row, rgb, candidate_key,prepared=None):
                 if uploaded is not None:
                     mask = validate_uploaded_mask(uploaded, rgb.shape[:2])
                     notes = ['アップロードしたマスクです。ROIで切り抜かず、手動修正と除外矩形のみ適用します。']
+                elif method.startswith('現在'):
+                    if candidate_key not in st.session_state:raise ValueError('先に候補マスクを作成してください。')
+                    mask=st.session_state[candidate_key]['mask'];notes=['現在の候補へ修正を適用しました。']
+                elif method.startswith('Lab'):
+                    proposed=propose_lab_mask(rgb,_json(roi,'ROI'),excluded_rects=rectangles)
+                    mask,notes=proposed['mask'],proposed['warnings']
                 elif method.startswith('支持'):
                     proposed = propose_conservative_mask(rgb,_json(roi,'ROI'),excluded_rects=rectangles,
                         support_polygon=_json(support,'支持ポリゴン') if support.strip() else None,
@@ -352,13 +410,38 @@ def _render_candidate_editor(row, rgb, candidate_key,prepared=None):
                     mask, notes = proposed['mask'], proposed['warnings']
                 mask = apply_mask_edits(mask, _json(additions, '追加ポリゴン'),
                                        _json(erasures, '消去ポリゴン'), excluded_rects=rectangles)
-                st.session_state[candidate_key] = dict(mask=mask, excluded_rects=rectangles, warnings=notes,
-                    processing_context=dict(roi_xyxy=_json(roi,'ROI'),method='uploaded-mask' if uploaded else method))
+                put_candidate(st.session_state,candidate_key,dict(mask=mask, excluded_rects=rectangles, warnings=notes,
+                    processing_context=dict(roi_xyxy=_json(roi,'ROI'),method='uploaded-mask' if uploaded else method)))
                 st.session_state.pop(f'intake_shape_confirmed_{ident}', None)
                 st.session_state.pop(f'intake_leakage_confirmed_{ident}', None)
                 st.success('未検品の候補を作成しました。下の元画像・マスク・オーバーレイで確認してください。')
             except ERRORS as exc:
                 st.error(f'候補を作成できません: {exc}')
+
+
+def _render_brush(rgb,key,ident):
+    if key not in st.session_state:return
+    with st.expander('ブラシ修正・Undo / Redo'):
+        left,right=st.columns(2)
+        for col,direction,label in ((left,'undo','修正を戻す'),(right,'redo','修正をやり直す')):
+            if col.button(label,key=f'intake_{direction}_{ident}',disabled=not st.session_state.get(key+'_'+direction)):
+                history_step(st.session_state,key,direction)
+                st.session_state.pop(f'intake_shape_confirmed_{ident}',None)
+                st.session_state.pop(f'intake_leakage_confirmed_{ident}',None)
+                st.rerun()
+        candidate=st.session_state[key]
+        event,revision=brush_component(rgb,candidate['mask'],key=f'intake_brush_{ident}')
+        if event and isinstance(event,dict) and event.get('action_id')!=st.session_state.get(key+'_event'):
+            st.session_state[key+'_event']=event.get('action_id')
+            try:
+                if event.get('revision')!=revision:raise ValueError('候補が更新されています。最新画像でもう一度修正してください。')
+                mask=brush_edit(candidate['mask'],event.get('points'),event.get('radius'),
+                                erase=event.get('erase'),excluded_rects=candidate.get('excluded_rects',[]))
+                put_candidate(st.session_state,key,dict(candidate,mask=mask))
+                st.session_state.pop(f'intake_shape_confirmed_{ident}',None)
+                st.session_state.pop(f'intake_leakage_confirmed_{ident}',None)
+                st.rerun()
+            except ERRORS as exc:st.error(f'ブラシ修正を適用できません: {exc}')
 
 
 def _render_review(row, candidate, db_path,preview_only=False):
@@ -374,6 +457,13 @@ def _render_review(row, candidate, db_path,preview_only=False):
         leakage = st.checkbox('秤の数字など重量が分かる領域がマスク内に残っていないことを確認しました',
                                key=f'intake_leakage_confirmed_{ident}')
         approve = st.form_submit_button('プレビュー版マスクを検品済みとして保存' if preview_only else 'このマスクを検品済みとして保存')
+        reject = st.form_submit_button('未承認へ差し戻す')
+    if reject:
+        try:
+            from pasta_weight_app_v2.photo_intake import reject_review
+            reject_review(ident,reviewer=reviewer,reason=notes,db_path=db_path)
+            _refresh('理由を記録して差し戻しました。学習には使用しません。')
+        except ERRORS as exc:st.error(f'差し戻せません: {exc}')
     if approve:
         try:
             if not variant_confirmed:

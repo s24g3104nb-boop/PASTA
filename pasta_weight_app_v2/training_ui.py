@@ -10,7 +10,7 @@ from storage import DEFAULT_DB, init_db, list_products
 from training_data import (delete_sample, init_training_db, list_samples,
                            register_sample, update_sample)
 from training_manager import (activate_model, get_active_model, init_training_manager,
-                              list_jobs, list_models, start_training)
+                              list_jobs, list_models, start_training,deactivate_model)
 from photo_intake_ui import render_photo_intake
 
 
@@ -50,6 +50,8 @@ def _fields(prefix, products, current=None):
     session = st.text_input('撮影セッションID', value=current.get('session_id', ''),
                             help='同じ撮影セッションの写真は学習用と評価用に分けません。',
                             key=f'{prefix}_session')
+    physical = st.text_input('物理試料ID（同じ麺を再計量・追加した写真は同じID）',
+                             value=current.get('physical_sample_id',''),key=f'{prefix}_physical')
     source = st.selectbox('画像の由来', ['real', 'synthetic'],
                           index=1 if current.get('source') == 'synthetic' else 0,
                           format_func=lambda value: '実写' if value == 'real' else 'CG・合成画像（テスト専用）',
@@ -63,6 +65,7 @@ def _fields(prefix, products, current=None):
                                 help='加工・拡張画像は元画像と同じ分割に固定します。')
     return dict(actual_weight_g=actual, mode=mode, product_id=product_id, pasta_type=pasta_type,
                 thickness_mm=thickness, captured_at=captured, batch_id=batch, session_id=session,
+                physical_sample_id=physical,
                 source=source, lighting=lighting, background=background, notes=notes,
                 parent_sample_id=parent_id)
 
@@ -77,6 +80,11 @@ def render_training_tab(db_path=DEFAULT_DB):
                '公開認証は未実装のため、この管理画面を無認証で外部公開しないでください。')
     with st.expander('受領パッケージ・重量確認・画像検品', expanded=False):
         render_photo_intake(db_path)
+    from pasta_weight_app_v2.learning_readiness import readiness
+    ready=readiness(db_path)
+    if ready['total']:
+        st.write('受領写真の学習前点検:',{k:ready[k] for k in ('confirmed_labels','tentative_or_unconfirmed','qc_approved','eligible_images','verified_independent_groups')})
+        for reason in ready['blocking_reasons']:st.info(reason)
     products = list_products(db_path)
     with st.expander('写真と実測重量を登録', expanded=True):
         with st.form('training_register'):
@@ -178,6 +186,9 @@ def _render_models(db_path):
         active = None
     if active:
         st.caption(f"測定に使用するモデル: ID {active['id']}。モデルを有効にしても推定精度を保証しません。")
+        if st.button('モデル採用を撤回してOpenCVへ戻す',key='training_deactivate'):
+            deactivate_model(db_path)
+            st.success('モデルの選択を解除しました。モデルと実験履歴は保持します。')
     else:
         st.info('有効な学習モデルはありません。OpenCVによる既存の測定は引き続き利用できます。')
     if not models:
@@ -193,7 +204,9 @@ def _render_models(db_path):
     if chosen is None:
         return
     model = mapping[chosen]
-    if st.button('このモデルを測定画面で使用', key='training_activate', disabled=model.get('source') != 'real'):
+    if model.get('revoked_reason'):
+        st.warning('ラベル訂正で採用を撤回した過去モデルです。この評価は旧ラベルに基づく履歴です。新しい台帳で再学習してください。')
+    if st.button('このモデルを測定画面で使用', key='training_activate', disabled=model.get('source') != 'real' or bool(model.get('revoked_reason'))):
         try:
             activate_model(chosen, db_path=db_path)
             st.success(f'モデルID {chosen}を選択しました。測定画面で学習モデル方式を選べます。')
@@ -208,6 +221,8 @@ def _render_models(db_path):
 def _render_report(report):
     st.caption(report.get('notice', 'val評価。testは別途実施してください。'))
     st.write('データ分割:', report.get('split_counts', {}))
+    if report.get('split_group_counts'):st.write('独立グループ数:',report['split_group_counts'])
+    if report.get('comparison'):st.write('共通成功集合での比較:',report['comparison'])
     rows = []
     details = []
     for method, label in (('regression', '画像回帰'), ('opencv', 'OpenCV本数検出')):
