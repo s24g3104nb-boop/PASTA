@@ -49,8 +49,9 @@ def image_rgb(path):
     with warnings.catch_warnings():
         warnings.simplefilter('error', Image.DecompressionBombWarning)
         with Image.open(path) as im:
-            if im.format not in ('JPEG', 'PNG'):
+            if im.format not in ('JPEG', 'PNG', 'MPO'):
                 raise ValueError('JPEG/PNGの画像が必要です')
+            im.seek(0)  # スマホのMPO-JPEGは主画像だけを1標本として読む。
             if im.width * im.height > MAX_PIXELS or min(im.size) < 16:
                 raise ValueError('画像寸法は各辺16px以上・合計3000万画素以下が必要です')
             im.load()
@@ -131,7 +132,8 @@ def grouping(samples):
     for i, a in enumerate(samples):
         for j in range(i):
             b = samples[j]
-            same = any(a.values[k] == b.values[k] for k in ('batch_id', 'session_id'))
+            same = any(a.values.get(k) and a.values.get(k) == b.values.get(k)
+                       for k in ('batch_id', 'session_id', 'physical_sample_id', 'weighing_id', 'shoot_id'))
             near = (a.perceptual_hash ^ b.perceptual_hash).bit_count() <= 4
             if same or a.pixel_hash == b.pixel_hash or near:
                 parent[find(i)] = find(j)

@@ -22,3 +22,13 @@ __pycache__/
 **/training/images/
 **/training/jobs/
 *.test-used.json
+# Private handoff packages may also be extracted outside data/ by mistake.
+**/Pasta_Lens_Private_Dataset/
+**/Pasta_Lens_42_Photos/
+*.jpg
+*.jpeg
+*.mpo
+*.zip
+*.csv
+!dataset/dataset_template.csv
+!dataset/ml_template.csv

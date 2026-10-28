@@ -36,6 +36,7 @@ def _connection(db_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=15)
     con.row_factory = sqlite3.Row
+    con.execute('PRAGMA foreign_keys=ON')
     try:
         with con:
             yield con
@@ -170,7 +171,7 @@ def package_inventory(root):
                 preview_damaged=preview_damaged, preview_group_counts=preview_groups)
 
 
-def load_manifest(root, db_path=DEFAULT_DB, expected_count=42):
+def load_manifest(root, db_path=DEFAULT_DB, expected_count=None):
     root = Path(root).resolve()
     rows = _manifest(root, expected_count)
     _init(db_path)
@@ -262,6 +263,36 @@ def merge_zip(upload, root):
         if len(infos) > 5000 or sum(i.file_size for i in infos) > 512_000_000:
             raise ValueError('ZIP展開後の件数・サイズが上限を超えています。')
         files = [i for i in infos if not i.is_dir()]
+        if files and all(i.filename.startswith('Pasta_Lens_Private_Dataset/') for i in files):
+            private_root = root.parent/'Pasta_Lens_Private_Dataset'
+            if all(PurePosixPath(i.filename).parts[:2] == ('Pasta_Lens_Private_Dataset','photos') for i in files):
+                try:
+                    from .dataset_revision import receive_zip
+                except ImportError:
+                    from pasta_weight_app_v2.dataset_revision import receive_zip
+                import tempfile
+                with tempfile.TemporaryDirectory() as directory:
+                    temporary=Path(directory)/'upload.zip'
+                    temporary.write_bytes(data)
+                    return receive_zip(temporary,private_root,private_root/'docs/ALL_58_PHOTO_MANIFEST.csv')['jpeg_names']
+            planned = []
+            for info in files:
+                parts = PurePosixPath(info.filename).parts
+                if (len(parts)!=3 or parts[1]!='docs' or '..' in parts or '\\' in info.filename or ':' in info.filename
+                        or stat.S_ISLNK(info.external_attr>>16) or info.file_size>30_000_000):
+                    raise ValueError('最新メタデータZIPの保存先が不正です。')
+                destination = private_root/'docs'/parts[2]
+                content=archive.read(info)
+                if destination.is_symlink() or not destination.resolve().is_relative_to(private_root.resolve()):
+                    raise ValueError('メタデータの保存先が不正です。')
+                if destination.exists() and destination.read_bytes()!=content:
+                    raise ValueError('受領済みの最新メタデータを上書きしません。別版として保管してください。')
+                planned.append((destination,content))
+            for destination,content in planned:
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                if not destination.exists():
+                    with destination.open('xb') as stream: stream.write(content)
+            return [str(p.relative_to(private_root)) for p,_ in planned]
         metadata_names = {'00_README_FIRST.md', '01_photo_manifest_NEEDS_CONFIRMATION.csv',
                           '02_confirm_groups_FILL_IN.csv', '03_CODEX_MESSAGE_COPY.md'}
         if files and all(i.filename in metadata_names for i in files):
@@ -360,7 +391,7 @@ def load_preview(row):
 
 
 def confirm_group(root, group_id, weight_g, *, batch_id, session_id, product_id,
-                  confirmed_same_batch, confirmed_by, db_path=DEFAULT_DB):
+                  confirmed_same_batch, confirmed_by, db_path=DEFAULT_DB, physical_sample_id=''):
     weight = _positive(weight_g, '確認した実測重量')
     if confirmed_same_batch is not True:
         raise ValueError('同じ実測の乾麺であることを確認してください。混在する場合は先に群を分けてください。')
@@ -379,6 +410,18 @@ def confirm_group(root, group_id, weight_g, *, batch_id, session_id, product_id,
         if any(row['training_sample_id'] is not None for row in rows):
             raise ValueError('学習登録済みの群は受領台帳から変更できません。学習台帳で変更履歴を管理してください。')
         for row in rows:
+            metadata = json.loads(row['metadata_json'])
+            latest = metadata.get('latest_label')
+            if latest:
+                if not isinstance(physical_sample_id,str) or not physical_sample_id.strip():
+                    raise ValueError('物理試料IDを確認してください。同じ麺の再使用・追加を別試料として分割しません。')
+                latest.update(shoot_id=session_id.strip(),weighing_id=batch_id.strip(),
+                              physical_sample_id=physical_sample_id.strip(),grouping_verified=True,
+                              previous_label_status=latest.get('weight_label_status'),
+                              weight_label_status='confirmed_by_user',nominal_weight_g=weight,
+                              confidence_reason=confirmed_by.strip())
+                con.execute('UPDATE photo_intake SET metadata_json=? WHERE id=?',
+                            (json.dumps(metadata,ensure_ascii=False),row['id']))
             con.execute('''UPDATE photo_intake SET weight_g=?,weight_verified=1,group_verified=1,
                 batch_id=?,session_id=?,product_id=?,confirmed_by=? WHERE id=?''',
                 (weight, batch_id.strip(), session_id.strip(), product_id, confirmed_by.strip(), row['id']))
@@ -393,9 +436,11 @@ def reassign_photo(photo_id, new_group, db_path=DEFAULT_DB):
     if row['training_sample_id'] is not None:
         raise ValueError('学習登録済みの写真です。')
     with _connection(db_path) as con:
-        con.execute('''UPDATE photo_intake SET capture_group_id=?,weight_g=NULL,weight_verified=0,
-            group_verified=0,batch_id=NULL,session_id=NULL,product_id=NULL,confirmed_by=NULL WHERE id=?''',
-            (new_group.strip(), photo_id))
+        con.execute('BEGIN IMMEDIATE')
+        cursor=con.execute('''UPDATE photo_intake SET capture_group_id=?,weight_g=NULL,weight_verified=0,
+            group_verified=0,batch_id=NULL,session_id=NULL,product_id=NULL,confirmed_by=NULL
+            WHERE id=? AND training_sample_id IS NULL''',(new_group.strip(), photo_id))
+        if cursor.rowcount!=1:raise ValueError('学習登録済みの写真です。最新の台帳を確認してください。')
         _audit(con, photo_id, 'group_reassigned_pending', dict(group=new_group))
 
 
@@ -406,7 +451,9 @@ def set_photo_mode(photo_id, mode, db_path=DEFAULT_DB):
     if row['training_sample_id'] is not None:
         raise ValueError('学習登録済みの写真です。')
     with _connection(db_path) as con:
-        con.execute('UPDATE photo_intake SET mode=? WHERE id=?', (mode, photo_id))
+        con.execute('BEGIN IMMEDIATE')
+        cursor=con.execute('UPDATE photo_intake SET mode=? WHERE id=? AND training_sample_id IS NULL', (mode, photo_id))
+        if cursor.rowcount!=1:raise ValueError('学習登録済みの写真です。最新の台帳を確認してください。')
         _audit(con, photo_id, 'capture_mode_confirmed', dict(mode=mode))
 
 
@@ -452,6 +499,10 @@ def save_review(photo_id, mask, *, excluded_rects=(), reviewer, shape_confirmed,
                    processing_context=processing_context or {},source_shape=list(rgb.shape[:2]))
     serialized = json.dumps(details,ensure_ascii=False,allow_nan=False)
     with _connection(db_path) as con:
+        con.execute('BEGIN IMMEDIATE')
+        current=con.execute('SELECT * FROM photo_intake WHERE id=?',(photo_id,)).fetchone()
+        if dict(current)!=row:
+            raise ValueError('検品中に写真台帳が変更されました。最新の内容を再確認してください。')
         con.execute('''UPDATE photo_intake SET qc_status='APPROVED',leakage_checked=1,
             mask_path=?,mask_sha256=?,processed_path=?,reviewed_original_sha256=?,review_json=? WHERE id=?''',
             (str(mask_path), digest, str(processed_path), source_sha,
@@ -459,8 +510,36 @@ def save_review(photo_id, mask, *, excluded_rects=(), reviewer, shape_confirmed,
         _audit(con, photo_id, 'mask_and_leakage_reviewed', details)
 
 
+def reject_review(photo_id, *, reviewer, reason, db_path=DEFAULT_DB):
+    if not isinstance(reviewer,str) or not reviewer.strip() or not isinstance(reason,str) or not reason.strip():
+        raise ValueError('差し戻した人と理由を記録してください。')
+    _init(db_path)
+    with _connection(db_path) as con:
+        con.execute('BEGIN IMMEDIATE')
+        row=con.execute('SELECT * FROM photo_intake WHERE id=?',(photo_id,)).fetchone()
+        if row is None:raise ValueError('受領写真IDが存在しません。')
+        if row['training_sample_id'] is not None:
+            raise ValueError('学習登録済みの写真は先に学習台帳で採用を撤回してください。')
+        con.execute("UPDATE photo_intake SET qc_status='REJECTED',leakage_checked=0 WHERE id=?",(photo_id,))
+        _audit(con,photo_id,'mask_rejected',dict(reviewer=reviewer,reason=reason,previous_mask_sha256=row['mask_sha256']))
+
+
 def promote_photo(photo_id, db_path=DEFAULT_DB):
-    row = _photo(photo_id, db_path)
+    _init(db_path)
+    try:
+        from .training_data import init_training_db
+    except ImportError:
+        from training_data import init_training_db
+    init_training_db(db_path)
+    with _connection(db_path) as con:
+        con.execute('BEGIN IMMEDIATE')
+        row=con.execute('SELECT * FROM photo_intake WHERE id=?',(photo_id,)).fetchone()
+        if row is None:raise ValueError('受領写真IDが存在しません。')
+        return _promote_locked(dict(row),con,db_path)
+
+
+def _promote_locked(row, con, db_path):
+    photo_id=row['id']
     if row['training_sample_id'] is not None:
         return row['training_sample_id']
     if not row['weight_verified'] or not row['group_verified']:
@@ -491,11 +570,18 @@ def promote_photo(photo_id, db_path=DEFAULT_DB):
     output = io.BytesIO()
     Image.fromarray(processed).save(output, 'PNG')
     metadata = json.loads(row['metadata_json'])
+    latest = metadata.get('latest_label')
+    if latest and (not latest.get('grouping_verified') or not latest.get('physical_sample_id')):
+        raise ValueError('物理試料・計量・撮影グループの対応が未確認です。')
     ident = register_sample(output.getvalue(), dict(actual_weight_g=weight, mode=row['mode'],
         source='real', product_id=row['product_id'], batch_id=row['batch_id'], session_id=row['session_id'],
         notes=f"受領台帳ID {photo_id} / source_variant={variant} / 受領SHA256 {source_sha} / 原写真参照SHA256 {row['expected_sha256']} / 検品マスク {row['mask_sha256']}",
-        thickness_mm=metadata.get('diameter_mm') or None), db_path=db_path)
-    with _connection(db_path) as con:
-        con.execute('UPDATE photo_intake SET training_sample_id=? WHERE id=?', (ident, photo_id))
-        _audit(con, photo_id, 'registered_for_training', dict(training_sample_id=ident))
+        thickness_mm=metadata.get('diameter_mm') or None,
+        physical_sample_id=(latest or {}).get('physical_sample_id','')), db_path=db_path,_con=con,
+        _restore_id=metadata.get('quarantined_training_sample_id'))
+    previous_sample_id=metadata.pop('quarantined_training_sample_id',None)
+    con.execute('UPDATE photo_intake SET training_sample_id=?,metadata_json=? WHERE id=?',
+                (ident,json.dumps(metadata,ensure_ascii=False),photo_id))
+    _audit(con, photo_id, 'registered_for_training', dict(training_sample_id=ident,
+                                                       previous_quarantined_sample_id=previous_sample_id))
     return ident

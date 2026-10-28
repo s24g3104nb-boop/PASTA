@@ -1,7 +1,7 @@
 """学習写真の登録台帳。実験スナップショットと元画像は変更しない。"""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import csv
 from datetime import datetime, timezone
 import io
@@ -25,7 +25,7 @@ except ImportError:
     from pasta_ml.dataset import MAX_BYTES, MAX_PIXELS, hashes, normalized_rgb
 
 
-TEXT_FIELDS = ('product_id', 'batch_id', 'session_id', 'pasta_type', 'captured_at',
+TEXT_FIELDS = ('product_id', 'batch_id', 'session_id', 'physical_sample_id', 'pasta_type', 'captured_at',
                'lighting', 'background', 'occlusion_level', 'device_label', 'notes')
 META_FIELDS = ('actual_weight_g', 'mode', 'source', 'thickness_mm',
                'individual_strand_count', 'parent_sample_id', *TEXT_FIELDS)
@@ -66,6 +66,7 @@ def init_training_db(db_path=DEFAULT_DB):
                 product_id TEXT NOT NULL,
                 batch_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
+                physical_sample_id TEXT NOT NULL DEFAULT '',
                 pasta_type TEXT NOT NULL DEFAULT '',
                 thickness_mm REAL,
                 captured_at TEXT NOT NULL DEFAULT '',
@@ -91,6 +92,13 @@ def init_training_db(db_path=DEFAULT_DB):
                 UNIQUE(sample_id, version)
             );
         ''')
+        columns = {r['name'] for r in con.execute('PRAGMA table_info(training_samples)')}
+        if 'physical_sample_id' not in columns:
+            backups=Path(db_path).resolve().parent/'backups'
+            backups.mkdir(parents=True,exist_ok=True)
+            with sqlite3.connect(backups/f'{Path(db_path).stem}.before-physical-sample-{uuid4().hex}.sqlite3') as backup:
+                con.backup(backup)
+            con.execute("ALTER TABLE training_samples ADD COLUMN physical_sample_id TEXT NOT NULL DEFAULT ''")
 
 
 def _upgrade_capture_modes(con):
@@ -246,8 +254,9 @@ def _image_rgb(image):
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as im:
-                if im.format not in ('JPEG', 'PNG'):
+                if im.format not in ('JPEG', 'PNG', 'MPO'):
                     raise ValueError('JPEG/PNG画像を登録してください。')
+                im.seek(0)
                 if im.width * im.height > MAX_PIXELS or min(im.size) < 16:
                     raise ValueError('画像は各辺16画素以上・3000万画素以下にしてください。')
                 im.load()
@@ -288,7 +297,7 @@ def _check_parent(con, data, sample_id=None):
     parent = con.execute('SELECT * FROM training_samples WHERE id=?', (parent_id,)).fetchone()
     if parent is None or parent['deleted_at']:
         raise ValueError('有効な元画像を指定してください。')
-    for key in ('batch_id', 'session_id', 'product_id', 'mode', 'source', 'actual_weight_g'):
+    for key in ('batch_id', 'session_id', 'physical_sample_id', 'product_id', 'mode', 'source', 'actual_weight_g'):
         if data[key] != parent[key]:
             raise ValueError('拡張画像は元画像と同じ重量・製品・状態・由来・秤量・撮影セッションにしてください。')
     # 元画像変更によって循環関係を作らない。
@@ -301,26 +310,50 @@ def _check_parent(con, data, sample_id=None):
                              (parent['parent_sample_id'],)).fetchone()
 
 
-def register_sample(image, metadata, *, db_path=DEFAULT_DB):
+def register_sample(image, metadata, *, db_path=DEFAULT_DB, _con=None, _restore_id=None):
     data = _validate_metadata(metadata)
     rgb = _image_rgb(image)
     digest, dhash = hashes(rgb)
-    init_training_db(db_path)
+    if _con is None:
+        init_training_db(db_path)
     directory = _photo_dir(db_path)
     directory.mkdir(parents=True, exist_ok=True)
     filename = digest + '.png'
     destination = directory / filename
+    if destination.is_symlink():
+        raise ValueError('学習画像の保存先にリンクは使用できません。')
     created_photo = False
     try:
-        with _connection(db_path) as con:
-            con.execute('BEGIN IMMEDIATE')
+        with (_connection(db_path) if _con is None else nullcontext(_con)) as con:
+            if _con is None:con.execute('BEGIN IMMEDIATE')
+            if _restore_id is not None:
+                # 訂正時に明示隔離した同じ画素だけを復旧する。一般の重複登録は引き続き拒否。
+                row=con.execute('SELECT * FROM training_samples WHERE id=?',(_restore_id,)).fetchone()
+                if row is None or not row['deleted_at']:
+                    raise ValueError('有効な隔離済み学習画像を指定してください。')
+                if row['pixel_hash']==digest:
+                    if hashes(_image_rgb(destination))[0]!=digest:
+                        raise ValueError('隔離した画像ファイルが変更されています。')
+                    _check_parent(con,data,_restore_id)
+                    columns=list(data)
+                    con.execute('UPDATE training_samples SET '+','.join(k+'=?' for k in columns)+
+                                ',deleted_at=NULL,updated_at=?,version=version+1 WHERE id=?',
+                                (*data.values(),_now(),_restore_id))
+                    _journal(con,_restore_id,'label_revision_readopted')
+                    return _restore_id
+                # 修正マスクで前景画素が変わった場合は旧版を隔離したまま新規標本とする。
             if con.execute('SELECT id FROM training_samples WHERE pixel_hash=?', (digest,)).fetchone():
                 raise ValueError('同じ画像が既に登録されています（削除済みを含む）。')
             _check_parent(con, data)
             # 排他的な生成。登録済みの画像ファイルを上書きしない。
-            with destination.open('xb') as photo:
-                created_photo = True
-                Image.fromarray(rgb).save(photo, format='PNG')
+            if destination.exists():
+                if destination.is_symlink() or hashes(_image_rgb(destination))[0]!=digest:
+                    raise ValueError('同名の保存画像が異なります。上書きしません。')
+                # 外側のDBトランザクションがrollbackした際の同一画素PNGは安全に再使用する。
+            else:
+                with destination.open('xb') as photo:
+                    created_photo = True
+                    Image.fromarray(rgb).save(photo, format='PNG')
             timestamp = _now()
             columns = ['pixel_hash', 'perceptual_hash', 'image_filename', *data, 'registered_at', 'updated_at']
             values = [digest, str(dhash), filename, *data.values(), timestamp, timestamp]
@@ -367,7 +400,7 @@ def update_sample(sample_id, changes, *, db_path=DEFAULT_DB, expected_version=No
         children = con.execute('SELECT id FROM training_samples WHERE parent_sample_id=? AND deleted_at IS NULL',
                                (sample_id,)).fetchall()
         if children and any(row[key] != data[key] for key in
-                            ('batch_id', 'session_id', 'product_id', 'mode', 'source', 'actual_weight_g')):
+                            ('batch_id', 'session_id', 'physical_sample_id', 'product_id', 'mode', 'source', 'actual_weight_g')):
             raise ValueError('拡張画像があるため、元画像のグループ・ラベル変更はできません。先に拡張画像を編集・削除してください。')
         con.execute(f"UPDATE training_samples SET {','.join(key+'=?' for key in data)},"
                     'version=version+1,updated_at=? WHERE id=?', (*data.values(), _now(), sample_id))

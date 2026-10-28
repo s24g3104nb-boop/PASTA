@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import platform
+from importlib.metadata import version
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,6 +75,10 @@ def train(samples, output, alpha=1., allow_synthetic=False):
                  experimental=True, alpha=alpha, dataset_sha256=dataset_hash(samples),
                  training_data_hash=dataset_hash(train_rows), entries=entries,
                  note='実験用CPU回帰。未見製品・撮影条件・範囲外重量の精度は保証しません。')
+    model['reproducibility']=dict(seed=42,python=platform.python_version(),
+        dependencies={name:version(name) for name in ('numpy','Pillow','opencv-python-headless')},
+        hyperparameters=dict(alpha=alpha),split_policy='session/batch/physical/pixel/perceptual union groups',
+        prediction_interval='not_calibrated')
     # Validation is reported; test labels/features do not train or tune the model.
     from .evaluate import evaluate
     model['validation_report'] = evaluate(samples, 'val', model=model, allow_synthetic=allow_synthetic)

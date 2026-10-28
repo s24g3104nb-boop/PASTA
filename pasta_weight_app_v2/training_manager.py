@@ -24,7 +24,7 @@ for directory in (REPO_DIR, APP_DIR):
 from pasta_weight_app_v2.pasta_ml.dataset import (
     Sample, dataset_hash, grouping, load_dataset, validate_splits, write_csv,
 )
-from pasta_weight_app_v2.pasta_ml.evaluate import evaluate
+from pasta_weight_app_v2.pasta_ml.evaluate import evaluate,compare_reports
 from pasta_weight_app_v2.pasta_ml.model import load_model, train
 from pasta_weight_app_v2.storage import DEFAULT_DB
 from pasta_weight_app_v2.training_data import export_dataset, list_samples
@@ -66,9 +66,17 @@ def init_training_manager(db_path=DEFAULT_DB):
             CREATE TABLE IF NOT EXISTS training_split_assignments (
                 fingerprint TEXT PRIMARY KEY, pixel_hash TEXT NOT NULL, batch_id TEXT NOT NULL,
                 session_id TEXT NOT NULL, perceptual_hash TEXT NOT NULL, split TEXT NOT NULL,
+                physical_sample_id TEXT NOT NULL DEFAULT '',
                 assigned_at TEXT NOT NULL
             );
         ''')
+        columns = {r['name'] for r in con.execute('PRAGMA table_info(training_split_assignments)')}
+        if 'physical_sample_id' not in columns:
+            backups=Path(db_path).resolve().parent/'backups'
+            backups.mkdir(parents=True,exist_ok=True)
+            with sqlite3.connect(backups/f'{Path(db_path).stem}.before-split-physical-{uuid4().hex}.sqlite3') as backup:
+                con.backup(backup)
+            con.execute("ALTER TABLE training_split_assignments ADD COLUMN physical_sample_id TEXT NOT NULL DEFAULT ''")
 
 
 def _job_dir(job_id, db_path):
@@ -158,7 +166,8 @@ def list_jobs(db_path=DEFAULT_DB):
 
 
 def _fingerprint(sample):
-    values = [sample.pixel_hash, sample.values['batch_id'], sample.values['session_id'], str(sample.perceptual_hash)]
+    values = [sample.pixel_hash, sample.values['batch_id'], sample.values['session_id'],
+              sample.values.get('physical_sample_id',''), str(sample.perceptual_hash)]
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
@@ -168,7 +177,7 @@ def assign_persistent_splits(samples, db_path):
         con.execute('BEGIN IMMEDIATE')
         history = con.execute('SELECT * FROM training_split_assignments').fetchall()
         combined = list(samples) + [Sample(
-            dict(batch_id=r['batch_id'], session_id=r['session_id']), Path('.'),
+            dict(batch_id=r['batch_id'], session_id=r['session_id'], physical_sample_id=r['physical_sample_id']), Path('.'),
             r['pixel_hash'], int(r['perceptual_hash'])) for r in history]
         current_groups, unknown = [], []
         counts = dict(train=0, val=0, test=0)
@@ -210,10 +219,11 @@ def assign_persistent_splits(samples, db_path):
         validate_splits(samples)
         for sample in samples:
             con.execute('''INSERT OR IGNORE INTO training_split_assignments
-                (fingerprint,pixel_hash,batch_id,session_id,perceptual_hash,split,assigned_at)
-                VALUES (?,?,?,?,?,?,?)''',
+                (fingerprint,pixel_hash,batch_id,session_id,perceptual_hash,split,assigned_at,physical_sample_id)
+                VALUES (?,?,?,?,?,?,?,?)''',
                 (_fingerprint(sample), sample.pixel_hash, sample.values['batch_id'],
-                 sample.values['session_id'], str(sample.perceptual_hash), sample.values['split'], _now()))
+                 sample.values['session_id'], str(sample.perceptual_hash), sample.values['split'], _now(),
+                 sample.values.get('physical_sample_id','')))
     return samples
 
 
@@ -268,6 +278,9 @@ def run_job(job_id, db_path=DEFAULT_DB):
             'dataset_sha256': dataset_hash(samples), 'calibrations': calibrations,
             'notice': 'valのみの開発用比較です。testは未開封。実写での汎化性能は別の最終評価が必要です。',
         }
+        report['comparison']=compare_reports(report['regression'],report['opencv'])
+        report['split_group_counts']={split:len(grouping([s for s in samples if s.values['split']==split])) for split in ('train','val','test')}
+        report['reproducibility']=artifact['reproducibility']
         serialized = json.dumps(report, ensure_ascii=False, allow_nan=False)
         (directory / 'report.json').write_text(serialized, encoding='utf-8')
         model_id = uuid4().hex
@@ -292,10 +305,14 @@ def list_models(db_path=DEFAULT_DB):
     init_training_manager(db_path)
     with _connection(db_path) as con:
         rows = con.execute('SELECT * FROM training_models ORDER BY created_at DESC').fetchall()
+        revoked={}
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='model_revocations'").fetchone():
+            revoked={r['model_id']:r['reason'] for r in con.execute('SELECT * FROM model_revocations')}
     result = []
     for row in rows:
         item = dict(row)
         item['active'] = bool(item['active'])
+        item['revoked_reason']=revoked.get(item['id'])
         item['report'] = json.loads(item.pop('report_json'))
         item['test_opened'] = Path(item['model_path'] + '.test-used.json').exists()
         if item['test_opened']:
@@ -306,6 +323,10 @@ def list_models(db_path=DEFAULT_DB):
 
 
 def _validated_artifact(metadata, db_path):
+    with _connection(db_path) as con:
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='model_revocations'").fetchone():
+            if con.execute('SELECT 1 FROM model_revocations WHERE model_id=?',(metadata['id'],)).fetchone():
+                raise ValueError('ラベル訂正で利用を撤回したモデルです。新しい台帳で再学習してください。')
     path = Path(metadata['model_path']).resolve()
     expected_root = Path(db_path).resolve().parent / 'training' / 'jobs'
     if not path.is_relative_to(expected_root) or path.name != 'model.json':
@@ -342,6 +363,12 @@ def get_active_model(db_path=DEFAULT_DB):
     model = models[0]
     model['artifact'] = _validated_artifact(model, db_path)
     return model
+
+
+def deactivate_model(db_path=DEFAULT_DB):
+    init_training_manager(db_path)
+    with _connection(db_path) as con:
+        con.execute('UPDATE training_models SET active=0')
 
 
 def main():
