@@ -23,6 +23,7 @@ from streamlit.testing.v1 import AppTest
 
 at = AppTest.from_file(str(Path(os.environ['PASTA_APP_DIR']) / 'app.py'), default_timeout=15).run()
 assert not at.exception, at.exception
+at.session_state['dev_tools_enabled']=True
 at.button(key='home_demo').click().run()
 assert not at.metric
 at.button(key='analyze_photo').click().run()
@@ -40,7 +41,8 @@ assert not at.checkbox(key='override_count').value
 assert any(m.value == '16.0 g' for m in at.metric)
 next(b for b in at.button if b.label == '履歴に保存').click().run()
 assert not at.exception, at.exception
-at.radio(key='main_nav').set_value('料理・栄養').run()
+at.radio(key='main_nav').set_value('設定').run()
+at.selectbox(key='settings_section').set_value('料理の栄養計算').run()
 assert at.selectbox(key='cooking_measurement').options[0] == '履歴を選択してください'
 from storage import list_measurements
 rows = list_measurements()
@@ -50,8 +52,9 @@ at.selectbox(key='cooking_measurement').set_value(rows[0]['id']).run()
 assert not at.exception, at.exception
 assert any('CGまたはデモ' in w.value for w in at.warning)
 at.radio(key='main_nav').set_value('ホーム').run()
-at.button(key='edit_capture').click().run()
-at.radio(key='estimate_method').set_value('学習モデル（実験用回帰）').run()
+at.button(key='home_demo').click().run()
+at.session_state['research_method']='学習モデル（実験用回帰）'
+at.run()
 assert not at.exception, at.exception
 at.button(key='analyze_photo').click().run()
 assert any('有効なモデルがありません' in w.value for w in at.warning)

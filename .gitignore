@@ -12,6 +12,10 @@ __pycache__/
 *.sqlite3
 *.sqlite
 *.db
+*.backup
+*.sqlite3-*
+**/meal_photos/
+**/backups/
 **/datasets/raw/
 **/dataset/raw/
 **/user_photos/

@@ -96,10 +96,15 @@ def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
 
 def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_g,
                      nutrition, image_rgb, db_path=DEFAULT_DB, source_kind='unknown',
-                     estimator='opencv', product_snapshot=None, diagnostics=None):
+                     estimator='opencv', product_snapshot=None, diagnostics=None,
+                     submission_token=None):
     # 履歴はローカル保存。Web公開環境での複数人利用には認証が必要。
     if source_kind not in {'unknown', 'real', 'synthetic'}:
         raise ValueError('画像の由来が不正です。')
+    if submission_token is not None and (
+            not isinstance(submission_token, str) or not submission_token.strip()
+            or len(submission_token) > 128):
+        raise ValueError('保存の識別情報が不正です。撮影画面からやり直してください。')
     if not product_name.strip() or not mode.strip():
         raise ValueError('製品名と撮影状態が必要です。')
     if finite_nonnegative(detected_count, '本数') != int(detected_count):
@@ -126,9 +131,23 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
         diagnostics=dict(diagnostics,inference_image_filename=exact_filename)
         serialized=json.dumps(diagnostics,ensure_ascii=False,allow_nan=False)
     try:
-        if diagnostics is not None:Image.fromarray(rgb).save(photo_dir/exact_filename,'PNG')
-        Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
         with _connect(db_path) as con:
+            # Serialize requests before checking the receipt, so a repeated click,
+            # reconnect or simultaneous request for this analysis saves only once.
+            con.execute('BEGIN IMMEDIATE')
+            if submission_token is not None:
+                if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='measurement_submissions'").fetchone():
+                    from data_backup import backup_database
+                    backup_database(db_path, label='measurement-submissions')
+                    con.execute('''CREATE TABLE measurement_submissions (
+                        submission_token TEXT PRIMARY KEY,
+                        measurement_id INTEGER NOT NULL REFERENCES measurements(id))''')
+                existing = con.execute('SELECT measurement_id FROM measurement_submissions WHERE submission_token=?',
+                                       (submission_token,)).fetchone()
+                if existing:
+                    return existing['measurement_id']
+            if diagnostics is not None:Image.fromarray(rgb).save(photo_dir/exact_filename,'PNG')
+            Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
             cursor = con.execute('''
                 INSERT INTO measurements (created_at, product_name, mode, detected_count,
                 estimated_g, actual_g, kcal, protein_g, fat_g, carb_g, image_filename,
@@ -140,6 +159,9 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
                   nutrition['kcal'], nutrition['protein_g'], nutrition['fat_g'],
                   nutrition['carb_g'], filename, source_kind, estimator, *snapshot))
             ident=cursor.lastrowid
+            if submission_token is not None:
+                con.execute('INSERT INTO measurement_submissions VALUES (?, ?)',
+                            (submission_token, ident))
             if diagnostics is not None:
                 con.execute('CREATE TABLE IF NOT EXISTS measurement_diagnostics (measurement_id INTEGER PRIMARY KEY REFERENCES measurements(id),details_json TEXT NOT NULL)')
                 con.execute('INSERT INTO measurement_diagnostics VALUES (?,?)',(ident,serialized))

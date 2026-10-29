@@ -14,7 +14,39 @@ from storage import DEFAULT_DB, list_measurements
 from ingredient_ui import render_ingredients
 
 
+def _diary_link(session, key):
+    from diary_ui import start_diary
+    st.button('この料理を食事日記に記録する', key=key,
+              on_click=start_diary,
+              kwargs={'measurement_id': session['measurement_id'],
+                      'cooking_session_id': session['id']}, width='stretch')
+
+
+def _restore_controls():
+    # Widget values disappear when another page is rendered. Keep a separate
+    # draft so visiting a record or settings does not discard cooking input.
+    for key, value in st.session_state.get('cooking_control_draft', {}).items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    incoming = st.session_state.pop('cooking_source_measurement_id', None)
+    if incoming is not None:
+        st.session_state['cooking_measurement'] = incoming
+
+
+def _remember_controls():
+    prefixes = ('cooking_batch_', 'cooking_template_', 'cooking_servings_',
+                'cooking_complete_', 'cooking_division_', 'cooking_fraction_',
+                'cooking_recipe_name_', 'cooking_recipe_source_',
+                'cooking_reference_g_', 'cooking_reference_servings_')
+    singles = {'cooking_measurement', 'cooking_dish', 'ingredient_input_style'}
+    st.session_state['cooking_control_draft'] = {
+        key: value for key, value in st.session_state.items()
+        if key in singles or key.startswith(prefixes)
+    }
+
+
 def render_cooking_tab(db_path=DEFAULT_DB):
+    _restore_controls()
     st.subheader('まず、乾麺の記録を選ぼう')
     st.warning('写真から材料の使用量や正確な総カロリーは分かりません。'
                '使った乾麺の履歴と、ソース・油・具材・調味料の実際の使用量を確認してください。')
@@ -26,13 +58,16 @@ def render_cooking_tab(db_path=DEFAULT_DB):
         st.info('先にホームで、この料理に使用する乾麺の測定結果を保存してください。')
         return
     mapping = {item['id']: item for item in measurements}
+    if st.session_state.get('cooking_measurement') not in mapping:
+        st.session_state.pop('cooking_measurement', None)
     measurement_id = st.selectbox(
-        'この料理に使用した乾麺の計測履歴ID', [None] + list(mapping),
+        'この料理に使った乾麺の記録', [None] + list(mapping),
         format_func=lambda key: '履歴を選択してください' if key is None else
         f"ID {key} | {mapping[key]['created_at']} | {mapping[key]['product_name']} | "
         f"実測 {mapping[key]['actual_g']}g / 推定 {mapping[key]['estimated_g']}g",
         key='cooking_measurement')
     if measurement_id is None:
+        _remember_controls()
         return
     record = mapping[measurement_id]
     try:
@@ -53,7 +88,8 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     if used_sessions:
         st.warning('この乾麺履歴は料理ID ' + '、'.join(str(item['id']) for item in used_sessions) +
                    ' に使用済みです。乾麺の二重計上を防ぐため、新しい料理として保存できません。')
-    same_batch = st.checkbox('この履歴の乾麺を今回の料理に使いました（同一調理バッチ）',
+        _diary_link(used_sessions[0], 'cooking_used_to_diary')
+    same_batch = st.checkbox('この記録の乾麺を今回の料理に使いました',
                              key=f'cooking_batch_{measurement_id}')
     selected_dish = st.selectbox('料理名（手動選択）', DISH_NAMES, key='cooking_dish')
     hints = INGREDIENT_HINTS.get(selected_dish, ())
@@ -84,7 +120,9 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     input_style=st.selectbox('食材の入力方法',['食材ごとに入力','表でまとめて入力'],key='ingredient_input_style')
     if input_style=='食材ごとに入力':
         frame=render_ingredients(initial_rows,editor_key)
-    with st.form(f'cooking_editor_{measurement_id}'):
+    # Individual changes reach the session immediately, including before a
+    # navigation click; the explicit button still controls database writes.
+    with st.container():
         if input_style=='表でまとめて入力':
             frame = st.data_editor(
                 initial_frame, num_rows='dynamic', hide_index=True, key=editor_key,
@@ -96,27 +134,34 @@ def render_cooking_tab(db_path=DEFAULT_DB):
                     'fat_100': st.column_config.NumberColumn('F(g)/100g', min_value=0.0, required=True),
                     'carb_100': st.column_config.NumberColumn('C(g)/100g', min_value=0.0, required=True),
                 })
-        complete = st.checkbox('使った追加材料・ソース・油・調味料をすべて入力しました（未入力分は合計に含まれません）')
+        complete = st.checkbox('使った追加材料・ソース・油・調味料をすべて入力しました（未入力分は合計に含まれません）',
+                               key=f'cooking_complete_{measurement_id}')
         template_confirmed = True
         if template:
             template_confirmed = st.checkbox('テンプレートの仮分量を確認・修正しました（概算として保存）',
                                               key=f'cooking_template_confirm_{measurement_id}_{template_id}')
-        division = st.radio('取り分け方法', ['等分人数', '自分が食べる割合'], horizontal=True)
+        division = st.radio('取り分け方法', ['等分人数', '自分が食べる割合'], horizontal=True,
+                            key=f'cooking_division_{measurement_id}')
         servings_input = st.number_input('等分する人数', min_value=1,
                                          value=template['default_servings'] if template else 1, step=1,
                                          key=f'cooking_servings_{measurement_id}_{template_id}')
         fraction_input = st.number_input('食べる割合（1=全部、0.5=半分）',
-                                         min_value=0.001, max_value=1.0, value=1.0, step=0.05)
-        save = st.form_submit_button('入力を確認して計算・保存', disabled=bool(used_sessions))
+                                         min_value=0.001, max_value=1.0, value=1.0, step=0.05,
+                                         key=f'cooking_fraction_{measurement_id}')
+        save = st.button('入力を確認して計算・保存', disabled=bool(used_sessions),
+                         key=f'cooking_save_{measurement_id}')
         st.caption('この材料入力を再利用したい場合は、分量と出典をレシピテンプレートとして登録できます。')
         with st.expander('この材料をレシピとして登録（任意）'):
-            template_name = st.text_input('登録するテンプレート名')
-            template_source = st.text_input('材料・栄養値の出典、分量の前提')
+            template_name = st.text_input('登録するテンプレート名', key=f'cooking_recipe_name_{measurement_id}')
+            template_source = st.text_input('材料・栄養値の出典、分量の前提', key=f'cooking_recipe_source_{measurement_id}')
             reference_dry_g = st.number_input('この入力材料に対応する基準乾麺g', min_value=0.1,
-                                               value=float(snapshot['dry_weight_g']), step=0.1)
+                                               value=float(snapshot['dry_weight_g']), step=0.1,
+                                               key=f'cooking_reference_g_{measurement_id}')
             reference_servings = st.number_input('テンプレートの基準人数', min_value=1,
-                                                  value=template['default_servings'] if template else 1, step=1)
-            register_template = st.form_submit_button('入力材料をレシピテンプレートとして登録')
+                                                  value=template['default_servings'] if template else 1, step=1,
+                                                  key=f'cooking_reference_servings_{measurement_id}')
+            register_template = st.button('入力材料をレシピテンプレートとして登録',
+                                          key=f'cooking_register_template_{measurement_id}')
     if register_template:
         try:
             save_recipe_template(name=template_name, selected_dish=selected_dish,
@@ -148,8 +193,12 @@ def render_cooking_tab(db_path=DEFAULT_DB):
                 servings=servings, consumed_fraction=fraction, recipe_template_id=template_id, db_path=db_path)
             st.success(f'料理の計算条件を保存しました（ID {session_id}）。')
             _show_result(result)
-        except (ValueError, TypeError, OverflowError, sqlite3.Error) as exc:
+            _diary_link({'id': session_id, 'measurement_id': measurement_id},
+                        'cooking_saved_to_diary')
+        except (ValueError, TypeError, OverflowError) as exc:
             st.error(f'計算・保存できませんでした: {exc}')
+        except sqlite3.Error:
+            st.error('料理を保存できませんでした。入力内容を保持しています。保存先を確認し、もう一度お試しください。')
     sessions = list_cooking_sessions(db_path)
     if templates:
         with st.expander('利用者レシピテンプレートの削除'):
@@ -174,6 +223,8 @@ def render_cooking_tab(db_path=DEFAULT_DB):
                 past_source = '実測重量' if past['weight_source'] == 'actual' else '推定重量（実測なし）'
                 st.caption(f"乾麺 {past['dry_weight_g']:.2f}g / {past_source} / {past['nutrition_source']}")
                 _show_result(session['calculation'])
+                _diary_link(session, f"cooking_history_to_diary_{session['id']}")
+    _remember_controls()
 
 
 def _show_result(result):
@@ -216,6 +267,7 @@ def render_cooking_page(db_path=DEFAULT_DB):
             st.caption(session['created_at'])
             if session['dry_snapshot'].get('source_kind')!='real':st.caption('CG・デモ / 来歴未確認の計算')
             with st.expander('栄養と計算の内訳'):_show_result(session['calculation'])
+            _diary_link(session, f"cooking_card_to_diary_{session['id']}")
     for template in templates:
         with st.container(border=True):
             st.subheader(template['name'])

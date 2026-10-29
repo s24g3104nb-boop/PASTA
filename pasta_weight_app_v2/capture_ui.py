@@ -28,6 +28,7 @@ def render_capture():
     st.subheader('パスタを撮影' if source_kind=='スマホで撮影' else '写真からはじめる')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
     mode=st.selectbox('乾麺の置き方', ['広げた状態','束の断面','束の側面・上面（回帰用）'],key='capture_mode',
+        format_func=lambda x: {'広げた状態':'広げている','束の断面':'束の先端を写している','束の側面・上面（回帰用）':'束を横・上から写している（現在は未対応）'}[x],
         help='自動判定ではありません。束の側面・上面は対応する学習モデルが必要です。')
     photo = None
     using_demo = source_kind.startswith('サンプル')
@@ -46,6 +47,8 @@ def render_capture():
         st.caption('スマートフォンのブラウザでカメラを使用するには、HTTPSなどの安全な接続が必要です。'
                    'カメラが開けない場合は標準カメラで撮影後、アップロードしてください。')
 
+    if photo is None and st.session_state.get('capture_photo') is not None:
+        photo=st.session_state['capture_photo']
     if photo is None and st.session_state.get('editing_photo') is not None:
         photo=st.session_state['editing_photo']
     if source_kind == 'スマホで撮影':
@@ -55,54 +58,45 @@ def render_capture():
         return
     try:
         preview = image_to_rgb(photo)
+        st.session_state['capture_photo']=photo
     except Exception as exc:
-        st.error(f'写真を読み込めませんでした。JPEGまたはPNGを選び直してください: {exc}')
+        st.error(f'写真を読み込めませんでした。JPEGまたはPNGを選び直してください。')
         return
     st.image(preview, caption='撮影した写真 · 向きは自動補正済み', width='stretch')
     st.caption('麺の全体が写っているか確認してください。撮影状態は手動で選択します。')
     st.subheader('写真の確認')
     products = list_products()
     product_ids = {p['id']: p for p in products}
+    if 'which_product' not in st.session_state and st.session_state.get('last_product_id') in product_ids:
+        st.session_state['which_product']=st.session_state['last_product_id']
     p_id = st.selectbox('重量・栄養計算に使う製品',
                         options=list(product_ids),
                         format_func=lambda n: product_ids[n]['name'], key='which_product')
     product = product_ids[p_id]
+    st.session_state['last_product_id']=p_id
     if product['name'].startswith('デモ用'):
         st.warning('現在の製品データは**仮の数値**です。実際の重量・カロリーではありません。'
                    '設定の「製品・校正」で自分の製品を登録してください。')
     elif product['g_per_strand'] <= 0:
         st.warning('この製品は1本あたりの重量が未設定です。まずパスタデータから校正値を登録してください。')
 
-    with st.expander('解析方式', expanded=False):
-        method = st.radio('推定方式', ['OpenCV本数検出', '学習モデル（実験用回帰）'], key='estimate_method')
+    from developer_ui import DEFAULT_SPREAD, DEFAULT_BUNDLE
+    developer = st.session_state.get('dev_tools_enabled', False)
+    method = st.session_state.get('research_method', 'OpenCV本数検出') if developer else 'OpenCV本数検出'
     using_regression = method.startswith('学習')
     active_model = None
     model_error = None
     if using_regression:
         try:
             active_model = get_active_model()
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            model_error = str(exc)
+        except (OSError, ValueError, sqlite3.Error):
+            model_error = '読み込みに失敗しました。開発・検証ツールで確認してください。'
+    parameters = (dict(st.session_state.get('research_spread', DEFAULT_SPREAD)) if developer else dict(DEFAULT_SPREAD)) if mode == '広げた状態' else ((dict(st.session_state.get('research_bundle', DEFAULT_BUNDLE)) if developer else dict(DEFAULT_BUNDLE)) if mode == '束の断面' else {})
 
-    with st.expander('検出パラメータを調整（うまく数えられない場合）'):
-        if mode == '広げた状態':
-            sat = st.slider('色の濃さ（最小彩度）', 0, 120, 20, 5)
-            val = st.slider('明るさ（最小輝度）', 0, 180, 75, 5)
-            min_area = st.slider('領域の最小面積（画素）', 30, 2500, 160, 10)
-            elongation = st.slider('細長さの基準', 1.5, 8.0, 3.0, 0.5)
-        elif mode == '束の断面':
-            min_radius = st.slider('円の最小半径（画素）', 2, 35, 8)
-            max_radius = st.slider('円の最大半径（画素）', 9, 65, 27)
-            min_distance = st.slider('検出円の最小間隔（画素）', 5, 90, 32)
-            sensitivity = st.slider('円検出の厳しさ（大きいほど厳しい）', 5, 45, 18)
-        else:
-            st.caption('束の側面・上面はHough円検出の対象外です。対応する回帰モデルが必要です。')
-
+    if mode == '束の側面・上面（回帰用）' and not using_regression:
+        st.info('この置き方は現在の通常測定では対応していません。麺を離して広げるか、束の先端が見えるように撮り直してください。')
+        return
     if st.button('この写真で解析する', type='primary', width='stretch', key='analyze_photo'):
-        parameters = (dict(saturation_min=sat,value_min=val,min_area=min_area,min_elongation=elongation)
-                      if mode=='広げた状態' else
-                      dict(min_radius=min_radius,max_radius=max_radius,min_distance=min_distance,hough_sensitivity=sensitivity)
-                      if mode=='束の断面' else {})
         for key in ('override_count','manual_count','actual_known'):
             st.session_state.pop(key,None)
         st.session_state['result_request']=dict(rgb=preview,photo=photo,product=product,mode=mode,
@@ -147,18 +141,22 @@ def render_results(request):
             elif mode=='束の断面':result=detect_bundle_ends(rgb,**request['parameters'])
             else:raise ValueError('束の側面・上面はOpenCV断面検出の対象外です。学習モデル方式を選択してください。')
     except Exception as exc:
-        st.error(f'画像を解析できませんでした。写真・設定を変更してください: {exc}')
+        st.error(f'画像を解析できませんでした。写真・設定を変更してください。')
         if st.button('再試行する'):st.rerun()
         return
     st.caption('✓ 解析が完了しました')
-    with st.expander('検出の詳細・本数を修正'):
-        st.image(result.overlay_rgb,caption='検出箇所：赤枠 / 赤丸',width='stretch')
-        st.image(result.mask,caption='白い部分が検出対象',width='stretch')
-        st.metric(result.description,f'{result.count} 個')
-        for msg in result.warnings:st.caption('⚠️ '+msg)
-        override=st.checkbox('誤検出があるので、本数を手動修正する',key='override_count')
-        detected_count=st.number_input('実際に確認した本数',min_value=0,value=result.count,step=1,key='manual_count') if override else result.count
-        if override:st.caption('この値は手動入力です。AIが認識した結果ではありません。')
+    st.session_state['dev_last_detection']=dict(overlay=result.overlay_rgb,mask=result.mask,count=result.count,parameters=request['parameters'])
+    override=False
+    detected_count=result.count
+    if st.session_state.get('dev_tools_enabled'):
+        with st.expander('検出の詳細・本数を修正'):
+            st.image(result.overlay_rgb,caption='検出箇所：赤枠 / 赤丸',width='stretch')
+            st.image(result.mask,caption='白い部分が検出対象',width='stretch')
+            st.metric(result.description,f'{result.count} 個')
+            for msg in result.warnings:st.caption('⚠️ '+msg)
+            override=st.checkbox('誤検出があるので、本数を手動修正する',key='override_count')
+            detected_count=st.number_input('実際に確認した本数',min_value=0,value=result.count,step=1,key='manual_count') if override else result.count
+            if override:st.caption('この値は手動入力です。AIが認識した結果ではありません。')
     rejection=weight_gate(product,using_demo=using_demo,mode=mode,mask=result.mask,manual=override)
     if rejection:
         st.warning(' '.join(rejection))
@@ -171,7 +169,7 @@ def render_results(request):
         weight=detected_count*product['g_per_strand']
         estimator='manual_count' if override else 'opencv'
         render_weight_result(weight=weight,product=product,rgb=rgb,mode=mode,using_demo=using_demo,
-            detected_count=detected_count,estimator=estimator,
+              detected_count=detected_count,estimator=estimator,
             diagnostics=trace(rgb,estimator=estimator,product=product,mode=mode,raw_sha256=request['raw_sha256'],
                 parameters=dict(automatic_count=result.count,used_count=detected_count,detection=request['parameters'])),
             explanation=f'計算：{detected_count}本 × {product["g_per_strand"]:.4f}g/本 = {weight:.2f}g。')

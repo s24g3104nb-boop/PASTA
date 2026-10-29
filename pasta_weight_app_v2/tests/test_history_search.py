@@ -21,7 +21,8 @@ save_measurement(product_name='検索試験パスタ', mode='spread', detected_c
     image_rgb=np.full((32,32,3), 150, dtype=np.uint8), source_kind='synthetic')
 at = AppTest.from_file('pasta_weight_app_v2/app.py').run(timeout=20)
 assert not at.exception, [item.message for item in at.exception]
-at.radio(key='main_nav').set_value('履歴').run(timeout=20)
+at.radio(key='main_nav').set_value('記録').run(timeout=20)
+at.selectbox(key='record_kind').set_value('乾麺の測定履歴').run()
 at.text_input(key='history_search').set_value('存在しない検索語').run(timeout=20)
 assert not at.exception, [item.message for item in at.exception]
 assert any('一致する履歴はありません' in item.value for item in at.info)

@@ -14,7 +14,7 @@ assert not at.exception
 assert not any(w.key=='training_upload' for w in at.get('file_uploader'))
 at.radio(key='main_nav').set_value('設定').run()
 at.selectbox(key='appearance').set_value('ダーク').run()
-at.radio(key='main_nav').set_value('履歴').run()
+at.radio(key='main_nav').set_value('記録').run()
 assert at.session_state['theme_preference']=='ダーク'
 at.radio(key='main_nav').set_value('ホーム').run()
 at.button(key='home_demo').click().run()
@@ -28,7 +28,8 @@ assert at.button(key='camera_fallback')
 at.button(key='camera_fallback').click().run()
 assert at.session_state['capture_source']=='写真をアップロード'
 at.radio(key='main_nav').set_value('設定').run()
-at.selectbox(key='settings_section').set_value('AI学習管理（管理者向け）').run()
+at.selectbox(key='settings_section').set_value('開発・検証ツール').run()
+at.selectbox(key='developer_section').set_value('学習データ・AIモデル管理').run()
 assert not at.exception
 assert at.button(key='training_start').disabled
 '''
