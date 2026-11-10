@@ -17,7 +17,10 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
         with right:
             st.caption(row['created_at'])
             st.markdown(f"**{row['product_name']}**")
-            st.markdown(f"### {row['estimated_g']:.1f} g　·　{row['kcal']:.0f} kcal")
+            weight=row['actual_g'] if row['estimator']=='manual_weight' else row['estimated_g']
+            calories=f"{row['kcal']:.0f} kcal" if row['kcal'] is not None else '栄養未計算'
+            st.markdown(f"### {weight:.1f} g · {calories}")
+            if row['estimator']=='manual_weight':st.caption('実測重量（推定なし）')
             tags=[]
             if row['actual_g'] is not None:tags.append(f"実測値登録済み {row['actual_g']:.1f} g")
             if row['estimator']=='manual_count':tags.append('本数を手動修正')
@@ -27,13 +30,13 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
         with st.expander('詳細・重量の修正'):
             if path.is_file():st.image(str(path),caption='保存した写真',width='stretch')
             st.write(f"撮影状態：{row['mode']} / 使用方式：{row['estimator']}")
-            if not row['estimator'].startswith('ridge:'):
+            if not row['estimator'].startswith('ridge:') and row['estimator']!='manual_weight':
                 st.write(f"計算に使用した本数：{row['detected_count']} 本")
             st.caption('元の推定重量・推定栄養値を保持し、はかりの実測値を追記します。料理計算では実測値を優先します。')
-            if row['actual_g'] is not None:
+            if row['actual_g'] is not None and row['estimated_g'] is not None:
                 st.write(f"絶対誤差：{abs(row['estimated_g']-row['actual_g']):.1f} g")
             with st.form(f"edit_history_{row['id']}"):
-                actual=st.number_input('はかりで測った重量（g）',min_value=.1,value=float(row['actual_g'] or max(.1,row['estimated_g'])),key=f"actual_{row['id']}")
+                actual=st.number_input('はかりで測った重量（g）',min_value=.1,value=float(row['actual_g'] or max(.1,row['estimated_g'] or .1)),key=f"actual_{row['id']}")
                 if st.form_submit_button('実測重量を保存'):
                     try:
                         change_measurement(row['id'],actual_g=actual,db_path=db_path)
@@ -72,7 +75,7 @@ def render_history(db_path=DEFAULT_DB):
         shown=frame.copy()
         shown.loc[shown.estimator.str.startswith('ridge:'),'detected_count']=None
         st.dataframe(shown[['created_at','product_name','mode','detected_count','estimated_g','actual_g','kcal','estimator','source_kind']],hide_index=True,width='stretch')
-        measured=frame[(frame.source_kind=='real') & (frame.actual_g>0)].copy()
+        measured=frame[(frame.source_kind=='real') & (frame.actual_g>0) & frame.estimated_g.notna()].copy()
         if len(measured):
             measured['absolute_error_g']=(measured.estimated_g-measured.actual_g).abs()
             measured['absolute_percentage_error']=measured.absolute_error_g/measured.actual_g*100

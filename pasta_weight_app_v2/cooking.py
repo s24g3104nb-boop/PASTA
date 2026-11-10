@@ -47,12 +47,13 @@ class Ingredient:
 
 def dry_snapshot(record: Mapping) -> dict:
     """保存済みの栄養値を固定し、実測がある場合は重量比で補正する。"""
-    estimated = nonnegative(record.get('estimated_g'), '保存された推定重量')
-    if estimated <= 0:
-        raise ValueError('推定重量が0の履歴から栄養値を復元できません。')
     actual = record.get('actual_g')
+    manual = record.get('estimator') == 'manual_weight' and record.get('estimated_g') is None
+    estimated = None if manual else nonnegative(record.get('estimated_g'), '保存された推定重量')
+    if not manual and estimated <= 0:
+        raise ValueError('推定重量が0の履歴から栄養値を復元できません。')
     weight = estimated if actual is None else nonnegative(actual, '保存された実測重量')
-    if weight <= 0:
+    if weight is None or weight <= 0:
         raise ValueError('料理に使用した乾麺重量は0gより大きい必要があります。')
     product_keys = ('kcal_100', 'protein_100', 'fat_100', 'carb_100')
     if all(record.get(key) is not None for key in product_keys):
@@ -60,7 +61,9 @@ def dry_snapshot(record: Mapping) -> dict:
                      for key, source in zip(NUTRIENT_KEYS, product_keys)}
         nutrition_source = '計測時に保存した製品の100g栄養値'
     else:
-        nutrition = {key: nonnegative(record.get(key), f'乾麺の{key}') * weight / estimated
+        if any(record.get(key) is None for key in NUTRIENT_KEYS):
+            raise ValueError('この乾麺は栄養未計算です。製品の栄養情報を登録した新しい測定記録を選ぶか、栄養未計算のまま食事日記に保存してください。')
+        nutrition = {key: nonnegative(record.get(key), f'乾麺の{key}') * weight / (weight if manual else estimated)
                      for key in NUTRIENT_KEYS}
         nutrition_source = '旧履歴の保存済み乾麺栄養値を重量比で補正（丸め誤差あり）'
     if not all(math.isfinite(v) for v in nutrition.values()):

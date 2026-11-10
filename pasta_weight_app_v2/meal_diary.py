@@ -115,7 +115,15 @@ def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',me
             c.execute(f'INSERT INTO meal_entries ({columns}) VALUES ({marks}) ON CONFLICT(id) DO UPDATE SET '+','.join(k+'=excluded.'+k for k in payload if k!='id'),tuple(payload.values()))
         return _decode(payload)
     except Exception:
-        if filename:photo_path(filename,db).unlink(missing_ok=True)
+        if filename:
+            # A lost commit acknowledgement must not delete a durable meal photo.
+            # If the DB cannot be checked, preserve the file for recovery.
+            try:
+                with sqlite3.connect(db) as check:
+                    committed=check.execute('SELECT 1 FROM meal_entries WHERE photo=?',(filename,)).fetchone()
+                if not committed:photo_path(filename,db).unlink(missing_ok=True)
+            except (sqlite3.Error,OSError):
+                pass
         raise
 
 

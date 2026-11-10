@@ -63,8 +63,9 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     measurement_id = st.selectbox(
         'この料理に使った乾麺の記録', [None] + list(mapping),
         format_func=lambda key: '履歴を選択してください' if key is None else
-        f"ID {key} | {mapping[key]['created_at']} | {mapping[key]['product_name']} | "
-        f"実測 {mapping[key]['actual_g']}g / 推定 {mapping[key]['estimated_g']}g",
+        f"ID {key} | {mapping[key]['created_at']} | {mapping[key]['product_name']} | " +
+        ('実測 ' + str(mapping[key]['actual_g']) + 'g' if mapping[key]['estimated_g'] is None
+         else f"推定 {mapping[key]['estimated_g']}g" + (f" / 実測 {mapping[key]['actual_g']}g" if mapping[key]['actual_g'] is not None else '')),
         key='cooking_measurement')
     if measurement_id is None:
         _remember_controls()
@@ -74,6 +75,7 @@ def render_cooking_tab(db_path=DEFAULT_DB):
         snapshot = dry_snapshot(record)
     except ValueError as exc:
         st.error(str(exc))
+        _diary_link({'measurement_id': measurement_id, 'id': None}, 'cooking_unknown_to_diary')
         return
     kind = snapshot['source_kind']
     if kind == 'synthetic' or record['product_name'].startswith('デモ用'):

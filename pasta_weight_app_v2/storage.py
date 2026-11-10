@@ -109,19 +109,29 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
         raise ValueError('製品名と撮影状態が必要です。')
     if finite_nonnegative(detected_count, '本数') != int(detected_count):
         raise ValueError('本数は整数にしてください。')
-    finite_nonnegative(estimated_g, '推定重量')
+    manual = estimator == 'manual_weight'
+    if manual:
+        if estimated_g is not None or actual_g is None:
+            raise ValueError('実測記録には実測重量だけを指定してください。')
+    else:
+        finite_nonnegative(estimated_g, '推定重量')
     if actual_g is not None:
         if finite_nonnegative(actual_g, '実測重量') <= 0:
             raise ValueError('実測重量は正数にしてください。')
     for k in ('kcal', 'protein_g', 'fat_g', 'carb_g'):
-        finite_nonnegative(nutrition[k], k)
+        if nutrition is not None:finite_nonnegative(nutrition[k], k)
+    nutrition = nutrition or dict.fromkeys(('kcal','protein_g','fat_g','carb_g'))
     snapshot_keys = ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')
-    snapshot = [finite_nonnegative(product_snapshot[k], k) if product_snapshot else None
+    snapshot = [finite_nonnegative(product_snapshot[k], k) if product_snapshot and product_snapshot.get(k) is not None else None
                 for k in snapshot_keys]
-    rgb = np.asarray(image_rgb)
-    if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3 or not rgb.size:
+    rgb = np.asarray(image_rgb) if image_rgb is not None else None
+    if rgb is None and not manual:raise ValueError('写真が必要です。')
+    if rgb is not None and (rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3 or not rgb.size):
         raise ValueError('保存画像はRGB uint8形式にしてください。')
     db_path = Path(db_path)
+    if manual or all(nutrition[k] is None for k in ('kcal','protein_g','fat_g','carb_g')):
+        from manual_measurement_storage import allow_unestimated_measurements
+        allow_unestimated_measurements(db_path)
     photo_dir = db_path.parent / 'photos'
     photo_dir.mkdir(parents=True, exist_ok=True)
     filename = f'{uuid4().hex}.jpg'
@@ -147,17 +157,17 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
                 if existing:
                     return existing['measurement_id']
             if diagnostics is not None:Image.fromarray(rgb).save(photo_dir/exact_filename,'PNG')
-            Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
+            if rgb is not None:Image.fromarray(rgb).save(photo_dir / filename, 'JPEG', quality=82)
             cursor = con.execute('''
                 INSERT INTO measurements (created_at, product_name, mode, detected_count,
                 estimated_g, actual_g, kcal, protein_g, fat_g, carb_g, image_filename,
                 source_kind, estimator, g_per_strand, kcal_100, protein_100, fat_100, carb_100)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), product_name, mode,
-                  int(detected_count), float(estimated_g),
+                  int(detected_count), (float(estimated_g) if estimated_g is not None else None),
                   (float(actual_g) if actual_g is not None else None),
                   nutrition['kcal'], nutrition['protein_g'], nutrition['fat_g'],
-                  nutrition['carb_g'], filename, source_kind, estimator, *snapshot))
+                  nutrition['carb_g'], (filename if rgb is not None else None), source_kind, estimator, *snapshot))
             ident=cursor.lastrowid
             if submission_token is not None:
                 con.execute('INSERT INTO measurement_submissions VALUES (?, ?)',
@@ -167,8 +177,15 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
                 con.execute('INSERT INTO measurement_diagnostics VALUES (?,?)',(ident,serialized))
             return ident
     except Exception:
-        (photo_dir / filename).unlink(missing_ok=True)
-        if diagnostics is not None:(photo_dir/exact_filename).unlink(missing_ok=True)
+        try:
+            with _connect(db_path) as check:
+                exists=check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='measurements'").fetchone()
+                committed=check.execute('SELECT 1 FROM measurements WHERE image_filename=?',(filename,)).fetchone() if exists else None
+            if not committed:
+                (photo_dir / filename).unlink(missing_ok=True)
+                if diagnostics is not None:(photo_dir/exact_filename).unlink(missing_ok=True)
+        except sqlite3.Error:
+            pass  # Preserve images if durable commit state cannot be checked.
         raise
 
 

@@ -8,6 +8,7 @@ from pasta_vision import nutrition_for_weight
 from storage import DEFAULT_DB, save_measurement
 from pasta_ml.model import predict
 from measurement_diagnostics import trace
+from nutrition_state import has_nutrition, snapshot_for_nutrition
 
 
 def _submission_token(rgb, product, mode, weight, detected_count, estimator):
@@ -37,18 +38,22 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     draft = st.session_state.get('measurement_actual_drafts', {}).get(token, {})
     nutrit = nutrition_for_weight(weight, product['kcal_100'],
                                   product['protein_100'],
-                                  product['fat_100'], product['carb_100'])
+                                  product['fat_100'], product['carb_100']) if has_nutrition(product, allow_demo=using_demo) else None
     st.subheader('あなたのパスタ')
     with st.container(key='weight_hero'):
         st.metric('推定重量', f'{weight:.1f} g')
-    st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
-    with st.container(key='nutrition_cards'):
-        c1,c2,c3=st.columns(3)
-        c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
-        c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
-        c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
+    if nutrit is not None:
+        st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
+        with st.container(key='nutrition_cards'):
+            c1,c2,c3=st.columns(3)
+            c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
+            c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
+            c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
+    else:
+        st.info('栄養は未計算です。製品の栄養情報を登録すると計算できます。重量だけでも保存できます。')
     st.caption(f'使用製品：{product["name"]}')
-    st.caption('推定重量から計算した乾麺分の栄養値です。ソース・具材は含みません。')
+    if nutrit is not None:
+        st.caption('推定重量から計算した乾麺分の栄養値です。ソース・具材は含みません。')
     if st.session_state.get('dev_tools_enabled'):
         with st.expander('推定方式と計算の詳細'):
             st.caption(f'使用方式: {estimator}')
@@ -74,7 +79,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                              actual_g=actual, nutrition=nutrit, image_rgb=rgb,
                              source_kind='synthetic' if using_demo else 'real',
                              estimator=estimator,
-                             product_snapshot=product, db_path=db_path,diagnostics=diagnostics,
+                             product_snapshot=snapshot_for_nutrition(product, allow_demo=using_demo), db_path=db_path,diagnostics=diagnostics,
                              submission_token=token)
             st.session_state['measurement_saved_results'][token] = {'id': saved_id}
             _remember_actual(token)
@@ -119,3 +124,5 @@ def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_
                          using_demo=False, detected_count=0, estimator=f"ridge:{active['id']}",
                          explanation=f"モデルID {active['id']} による連続重量の推定です。本数は計数していません。",
                          db_path=db_path,diagnostics=trace(rgb,estimator=f"ridge:{active['id']}",product=product,mode=mode,model=active))
+
+    return True

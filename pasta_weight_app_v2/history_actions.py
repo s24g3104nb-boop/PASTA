@@ -24,3 +24,8 @@ def change_measurement(ident, *, actual_g=None, archive=False, db_path=DEFAULT_D
             con.execute('UPDATE measurements SET archived=1 WHERE id=?',(ident,))
         else:
             con.execute('UPDATE measurements SET actual_g=? WHERE id=?',(actual_g,ident))
+
+            if row['estimator']=='manual_weight':
+                keys=('kcal_100','protein_100','fat_100','carb_100')
+                values=[actual_g*row[k]/100 if row[k] is not None else None for k in keys]
+                con.execute('UPDATE measurements SET kcal=?,protein_g=?,fat_g=?,carb_g=? WHERE id=?',(*values,ident))

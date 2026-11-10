@@ -214,7 +214,7 @@ def _link_options(draft, db_path):
             options.append(draft['measurement_id'])
         _field(st.selectbox, '乾麺の記録', draft, 'measurement_id', options=options,
                format_func=lambda ident: '関連付けない' if ident is None else
-               (f"{measurement_map[ident]['product_name']} · 推定 {measurement_map[ident]['estimated_g']:g} g · #{ident}"
+               (f"{measurement_map[ident]['product_name']} · " + (f"実測 {measurement_map[ident]['actual_g']:g} g" if measurement_map[ident]['estimated_g'] is None else f"推定 {measurement_map[ident]['estimated_g']:g} g") + f" · #{ident}"
                 if ident in measurement_map else f'保存済みの乾麺 #{ident}'))
         chosen = measurement_map.get(draft['measurement_id'])
         if chosen:
@@ -350,7 +350,7 @@ def _render_detail(rows, db_path):
     st.button('栄養計算を追加・変更する', key='meal_detail_cooking', width='stretch',
               on_click=_detail_to_cooking, args=(row,))
     st.button('別の食事を記録する', key='meal_detail_new', on_click=start_diary, width='stretch')
-    with st.expander('この記録を削除する'):
+    with st.expander('この記録を削除する', expanded=bool(st.session_state.get('meal_delete_confirm_' + row['id'], False))):
         confirmed = st.checkbox('この食事記録を一覧から削除する', key='meal_delete_confirm_' + row['id'])
         st.caption('関連する乾麺の測定履歴や栄養計算は削除しません。')
         if st.button('削除を確定', key='meal_delete', disabled=not confirmed):
