@@ -1,8 +1,13 @@
 import sqlite3
+import logging
 import streamlit as st
 from storage import list_products, save_product
 
 def render_products():
+    if st.session_state.pop('product_saved_notice',False):
+        st.success('製品データを保存しました。測定を再開できます。')
+    if st.session_state.get('result_request'):
+        st.button('測定画面に戻る',key='calibration_return',on_click=lambda:st.session_state.update(main_nav='ホーム',capture_source='写真をアップロード'))
     st.subheader('製品データの登録・更新')
     st.write('1本あたりの重量は、**同じ製品・長さの乾麺を例えば50本数え、'
              '電子はかりで測った総重量を50で割る**と求められます。'
@@ -41,13 +46,28 @@ def render_products():
                 raise ValueError('校正用の実測重量は0gより大きい値を入力してください。')
             save_product(name, g_per_strand, kc, pr, fa, ca,
                          product_id=(selected or None))
-            st.success('製品データを保存しました。')
+            request=st.session_state.get('result_request')
+            if request and request['product']['id']==selected:
+                # Resume with the new calibration/nutrition; the image analysis
+                # itself is unchanged. Historical records retain their snapshot.
+                request['product']=dict(current,name=name.strip(),g_per_strand=g_per_strand,
+                    kcal_100=kc,protein_100=pr,fat_100=fa,carb_100=ca)
+            st.session_state['product_saved_notice']=True
             st.rerun()
-        except (sqlite3.IntegrityError, ValueError) as err:
-            st.error(f'保存できませんでした（商品名の重複や入力値をご確認ください）：{err}')
+        except ValueError as err:
+            st.error(str(err))
+        except sqlite3.IntegrityError:
+            st.error('同じ名前の製品が登録されています。既存の製品を選んで更新するか、別の名前にしてください。')
+        except (OSError,sqlite3.Error):
+            logging.exception('Unable to save product')
+            st.error('保存できませんでした。入力内容は残っています。空き容量やファイルの使用状況を確認して、もう一度保存してください。')
 
 
 def render_guide():
+    from capture_guide_ui import render_sheet_guide
+    with st.expander('A4撮影補助シートの使い方（研究用）'):
+        render_sheet_guide()
+
     st.subheader('準備するもの')
     st.markdown('''
     - パソコン（Pythonを動かす）とスマートフォン

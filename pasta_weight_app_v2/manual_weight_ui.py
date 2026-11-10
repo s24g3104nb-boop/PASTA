@@ -45,8 +45,8 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
 
 def recovery(product,rgb,*,synthetic=False):
     st.caption('重量の推定はできませんでした。次の操作を選んでください。')
-    if st.button('校正設定へ',key='recovery_calibration',width='stretch'):
-        st.session_state.update(main_nav='設定',settings_section='製品・校正');st.rerun()
+    st.button('校正設定へ',key='recovery_calibration',width='stretch',
+        on_click=lambda:st.session_state.update(main_nav='設定',settings_section='製品・校正'))
     from ui_shell import start_capture
     st.button('撮り直す・写真を選び直す',key='recovery_retake',on_click=start_capture,args=('写真をアップロード',),width='stretch')
     render_manual_weight(product,rgb,synthetic=synthetic)

@@ -2,7 +2,7 @@
 :root { --pl-bg:#FAF8F2; --pl-card:#FFFDF9; --pl-text:#29352E; --pl-muted:#626e64;
 --pl-line:#E6E8DF; --pl-orange:#5D7765; --pl-orange-soft:#f3e6dc; --pl-green:#496652;
 --pl-sage:#e7eee6; --pl-radius:24px; --pl-shadow:0 8px 30px #263a2810; --pl-space:24px; }
-THEME_OVERRIDES
+
 .stApp {background:var(--pl-bg);color:var(--pl-text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
 [data-testid="stHeader"] {background:transparent;}
 .block-container {max-width:1080px;padding:2.5rem 2rem 8rem;}
@@ -12,11 +12,14 @@ p,label,li {line-height:1.65;} [data-testid="stCaptionContainer"] {color:var(--p
 .pl-brand {display:flex;align-items:center;gap:10px;font-size:19px;font-weight:750;letter-spacing:-.6px;margin-bottom:24px;}
 .pl-brand span:first-child {background:var(--pl-green);color:white;border-radius:12px;width:36px;height:36px;display:grid;place-items:center;}
 .pl-brand small {margin-left:auto;font-size:11px;letter-spacing:.08em;color:var(--pl-muted);font-weight:500;}
-.pl-hero {position:relative;border-radius:32px;background:var(--pl-sage);padding:34px;overflow:hidden;margin:0 0 16px;}
+.pl-hero {position:relative;border-radius:var(--pl-radius);background:var(--pl-card);border:1px solid var(--pl-line);padding:var(--pl-space-lg);overflow:hidden;margin:0 0 16px;}
 .pl-eyebrow {font-size:11px;letter-spacing:.17em;color:var(--pl-green);font-weight:750;}
-.pl-hero h1 {max-width:70%;margin:14px 0 12px;font-size:clamp(28px,4vw,44px)!important;}
-.pl-hero p {max-width:68%;color:var(--pl-muted);font-size:14px;margin-bottom:0;}
-.pl-hero svg {position:absolute;right:-10px;bottom:0;width:34%;height:auto;opacity:.95;}
+.pl-hero h1 {margin:14px 0 12px;font-size:clamp(25px,3.8vw,36px)!important;text-wrap:balance;}
+.pl-hero p {color:var(--pl-muted);font-size:15px;margin-bottom:0;}
+.pl-mobile-break {display:none;}
+.st-key-home_actions button {min-height:68px;text-align:left;padding:1rem 1.2rem;}
+.st-key-home_actions button p {font-size:1.05rem;}
+.st-key-home_meal button {background:var(--pl-sage)!important;}
 .pl-empty {background:var(--pl-card);border:1px solid var(--pl-line);border-radius:var(--pl-radius);padding:28px;text-align:center;color:var(--pl-muted);}
 .pl-empty strong {display:block;color:var(--pl-text);font-size:17px;margin:8px 0;}
 .pl-tip {background:var(--pl-orange-soft);border-radius:20px;padding:20px 24px;margin:12px 0;color:var(--pl-text);}
@@ -61,8 +64,8 @@ background:var(--pl-card);border:1px solid var(--pl-line);border-radius:24px;pad
 @media(max-width:640px) {
  .block-container {padding:1.3rem 1rem calc(110px + env(safe-area-inset-bottom));}
  .pl-brand {margin-top:12px;margin-bottom:20px;} .pl-brand small{font-size:10px;}
- .pl-hero {padding:25px 22px;border-radius:26px;} .pl-hero h1{max-width:75%;} .pl-hero p{max-width:75%;font-size:13px;}
- .pl-hero svg{right:-24px;width:38%;}
+ .pl-hero {padding:25px 22px;border-radius:26px;} .pl-hero p{font-size:14px;}
+ .pl-mobile-break {display:initial;}
  .st-key-main_nav {bottom:0;left:0;transform:none;width:100%;border-radius:22px 22px 0 0;padding:8px 12px calc(8px + env(safe-area-inset-bottom));}
  [data-testid="stMetricValue"]{font-size:1.7rem;}
  .st-key-capture_actions [data-testid="stHorizontalBlock"] {flex-wrap:nowrap;}
@@ -83,7 +86,7 @@ background:var(--pl-card);border:1px solid var(--pl-line);border-radius:24px;pad
 .stApp [data-testid="stAlert"] {background:var(--pl-orange-soft);color:var(--pl-text);}
 .stApp [data-testid="stAlert"] p {color:var(--pl-text)!important;}
 .stApp [data-testid="stMetricLabel"] p {color:var(--pl-muted);}
-.stApp [data-testid="stVerticalBlockBorderWrapper"],.stApp [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"][height="auto"]) {border-color:var(--pl-line);}
+.stApp [data-testid="stVerticalBlockBorderWrapper"] {border-color:var(--pl-line);}
 .stApp [data-testid="stCaptionContainer"] {opacity:1;}
 [class*="st-key-card_"] {background:var(--pl-card);border:1px solid var(--pl-line)!important;border-radius:var(--pl-radius)!important;box-shadow:var(--pl-shadow);}
 /* Keep native scroll containers for large administrative tables; never overflow the page. */
@@ -100,3 +103,45 @@ background:var(--pl-card);border:1px solid var(--pl-line);border-radius:24px;pad
 .st-key-diary_calendar button p {font-size:12px;white-space:nowrap;}
 .pl-meal-placeholder {background:var(--pl-sage);color:var(--pl-muted);border-radius:20px;min-height:110px;display:grid;place-items:center;text-align:center;padding:20px;}
 .st-key-diary_list [data-testid="stImage"] img {max-height:280px;object-fit:cover;}
+
+/* UI polish: palette and geometry live here; Python chooses only a theme name.
+   .st-key-* are application-owned hooks. data-testid hooks are limited to
+   Streamlit components and checked in Chromium; generated class names avoided. */
+:root {--pl-on-accent:#fff;--pl-focus:#80553d;--pl-space-xs:8px;--pl-space-sm:12px;--pl-space-md:20px;--pl-space-lg:32px;--pl-control-radius:14px;color-scheme:light;}
+:root:has(.pl-theme-dark) {--pl-on-accent:#18251e;--pl-bg:#181e1c;--pl-card:#232c28;--pl-text:#f2f3ee;--pl-muted:#bdc8c0;--pl-line:#526159;--pl-orange:#aecdb8;--pl-orange-soft:#343029;--pl-green:#b9d8c3;--pl-sage:#2d4038;--pl-focus:#e5b697;--pl-shadow:0 8px 28px #0003;color-scheme:dark;}
+@media(prefers-color-scheme:dark) {:root:has(.pl-theme-auto) {--pl-on-accent:#18251e;--pl-bg:#181e1c;--pl-card:#232c28;--pl-text:#f2f3ee;--pl-muted:#bdc8c0;--pl-line:#526159;--pl-orange:#aecdb8;--pl-orange-soft:#343029;--pl-green:#b9d8c3;--pl-sage:#2d4038;--pl-focus:#e5b697;--pl-shadow:0 8px 28px #0003;color-scheme:dark;}}
+.stApp {font-family:system-ui,-apple-system,BlinkMacSystemFont,"Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif;}
+h1,h2,h3 {overflow-wrap:anywhere;letter-spacing:-.02em;}
+.stApp p,.stApp label {overflow-wrap:anywhere;}
+a {color:var(--pl-green);text-underline-offset:3px;}
+.pl-brand span:first-child {color:var(--pl-bg);}
+.pl-brand small {font-size:12px;letter-spacing:.02em;}
+.stButton button,.stFormSubmitButton button,.stDownloadButton button {min-height:48px;border-radius:var(--pl-control-radius);padding:.65rem 1rem;white-space:normal;}
+.stButton button:not(:disabled):hover,.stDownloadButton button:not(:disabled):hover {border-color:var(--pl-green);box-shadow:0 0 0 1px var(--pl-green);}
+.stButton button:disabled {opacity:.55;cursor:not-allowed;}
+button:focus-visible,input:focus-visible,textarea:focus-visible,[role="combobox"]:focus-visible {outline:3px solid var(--pl-focus)!important;outline-offset:3px;}
+.stApp input,.stApp textarea {caret-color:var(--pl-text);line-height:1.6;}
+.stApp textarea {min-height:104px;}
+.stApp [role="combobox"] {min-height:44px;}
+.stApp [role="listbox"],.stApp [role="option"] {background:var(--pl-card);color:var(--pl-text);}
+.stApp [role="option"][aria-selected="true"] {background:var(--pl-sage);}
+[data-testid="stImage"] {margin-block:var(--pl-space-xs);}
+[data-testid="stImage"] img {border:1px solid var(--pl-line);max-height:560px;object-fit:contain;background:var(--pl-card);}
+[class*="st-key-card_recent_"] [data-testid="stImage"] img {max-height:260px;object-fit:cover;}
+[data-testid="stMetricValue"] {font-variant-numeric:tabular-nums;letter-spacing:-.03em;}
+.st-key-weight_hero [data-testid="stMetricValue"] {font-size:clamp(2.8rem,9vw,4rem);}
+.st-key-nutrition_cards [data-testid="stMetricLabel"] p {font-size:.8rem;white-space:normal;text-align:center;}
+.st-key-main_nav {box-sizing:border-box;bottom:max(12px,env(safe-area-inset-bottom));}
+.st-key-main_nav label {cursor:pointer;}
+.st-key-main_nav input {pointer-events:none;}
+[data-testid="stFileUploader"] {border-radius:var(--pl-control-radius);}
+[data-testid="stFileUploader"] button {min-height:44px;}
+@media(max-width:640px) {
+ .block-container {padding-inline:16px;padding-bottom:calc(140px + env(safe-area-inset-bottom));}
+ .pl-brand small {display:none;}
+ .pl-hero {padding:24px 20px;}
+ .st-key-main_nav {bottom:0;}
+ .st-key-nutrition_cards [data-testid="stMetricValue"] {font-size:clamp(1rem,5vw,1.4rem);}
+ .st-key-nutrition_cards [data-testid="stMetric"] {padding:12px 4px;}
+ [data-testid="stImage"] img {max-height:420px;}
+}

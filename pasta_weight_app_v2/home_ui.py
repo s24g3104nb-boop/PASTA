@@ -4,17 +4,28 @@ import sqlite3
 import streamlit as st
 from meal_diary import entries, photo_path
 from diary_ui import start_diary, open_diary_entry
-from ui_shell import hero, empty_state, start_capture
+from ui_shell import hero, empty_state, start_capture, resume_capture, start_manual_weight
 
 
 def render_home():
+    if st.session_state.get('manual_only'):
+        from manual_weight_ui import render_without_photo
+        render_without_photo()
+        return
     hero()
-    st.button('乾麺の重さをはかる', icon=':material/photo_camera:', type='primary',
-              width='stretch', on_click=start_capture, args=('スマホで撮影',), key='home_camera')
-    st.button('食べたパスタを記録する', icon=':material/restaurant:', width='stretch',
-              on_click=start_diary, key='home_meal')
-    st.caption('写真なしでも記録できます。重さの推定精度は検証中です。')
-    with st.expander('写真なしで操作を試す'):
+    with st.container(key='home_actions'):
+        st.button('乾麺の重さをはかる', icon=':material/photo_camera:', type='primary',
+                  width='stretch', on_click=start_capture, args=('スマホで撮影',), key='home_camera')
+        st.button('食べたパスタを記録する', icon=':material/restaurant:', width='stretch',
+                  on_click=start_diary, key='home_meal')
+    if st.session_state.get('capture_photo') is not None or st.session_state.get('result_request'):
+        st.button('途中の測定を再開する', key='home_resume_capture', width='stretch', on_click=resume_capture)
+    with st.expander('写真を選ぶ・はかりの数値を記録する'):
+        st.button('撮影済みの写真から選ぶ', icon=':material/photo_library:', width='stretch',
+                  on_click=start_capture, args=('写真をアップロード',), key='home_upload')
+        st.caption('電子はかりで測った重さは、写真なしでも保存できます。画像からの推定は行いません。')
+        st.button('写真なしで実測重量を記録する', key='home_manual_weight', width='stretch', on_click=start_manual_weight)
+    with st.expander('サンプルで操作を確認する'):
         st.caption('CGの操作確認です。実物の推定精度を示しません。')
         st.button('サンプルで試す', key='home_demo', on_click=start_capture, args=('サンプル画像（今すぐ試す）',))
     st.subheader('最近食べたパスタ')
@@ -28,10 +39,19 @@ def render_home():
         empty_state('最初のひと皿を記録しよう', '料理名と食べた日だけでも残せます。')
     for row in rows[:3]:
         with st.container(border=True, key='card_recent_' + row['id']):
-            path = photo_path(row['photo']) if row['photo'] else None
-            if path and path.is_file():
-                st.image(str(path), width='stretch')
-            else:
+            try:
+                path = photo_path(row['photo']) if row['photo'] else None
+            except (OSError,ValueError):
+                logging.warning('Unable to resolve recent meal photo')
+                path = None
+            shown=False
+            try:
+                if path and path.is_file():
+                    st.image(str(path), width='stretch')
+                    shown=True
+            except (OSError,ValueError):
+                logging.warning('Unable to display recent meal photo')
+            if not shown:
                 empty_state('🍝', '写真なしの記録')
             st.subheader(row['dish_name'])
             st.caption(row['eaten_date'] + ' ' + (row['eaten_time'] or '') + ' ' + row.get('meal_type', ''))

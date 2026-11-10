@@ -1,0 +1,6 @@
+# Windows command files are checked out with CRLF; store normalized text in Git.
+*.bat text eol=crlf whitespace=cr-at-eol
+
+# Preserve printable/reference assets byte-for-byte.
+*.pdf binary
+*.png binary
