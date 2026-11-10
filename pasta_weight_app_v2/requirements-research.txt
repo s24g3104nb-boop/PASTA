@@ -1,0 +1,5 @@
+# Optional offline research only. Never activates a production model.
+-r requirements-dev.txt
+scikit-learn>=1.7,<2
+joblib>=1.4,<2
+matplotlib>=3.10,<4
