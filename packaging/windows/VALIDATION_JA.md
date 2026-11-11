@@ -32,3 +32,5 @@ WindowsのbatはUTF-8（BOMなし）・CRLF。ファイル確認、Python3.12確
 通常はsetup_windows.batとstart_windows.batを使う。自動の簡易確認は、展開フォルダで `.venv\Scripts\python.exe smoke_test.py`。確認用データはOSの一時フォルダに作成して終了時に消去する。自分のuser_dataを使用しない。
 
 依存全体のWindows専用ロックではなく、主要5ライブラリを固定したソース配布。初回セットアップにはネット接続が必要。仮想環境やwheelをZIPに同梱していない。
+
+最終統合検証：全490テスト、Chromium8ケース成功。Windows CPython3.12/64bit用のランタイムwheel一式の解決・ダウンロードも成功しました。実際のWindowsへのインストールとiPhone実機操作は未検証です。最終ZIP自体は作成後に別フォルダへ展開し、ハッシュ照合と専用一時DBの起動・保存スモークテストを実行します。

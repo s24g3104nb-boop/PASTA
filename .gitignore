@@ -36,3 +36,6 @@ __pycache__/
 *.csv
 !dataset/dataset_template.csv
 !dataset/ml_template.csv
+
+# Local distribution runtime data
+**/user_data/
