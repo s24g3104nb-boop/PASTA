@@ -30,6 +30,10 @@ def init_cooking_db(db_path=DEFAULT_DB):
     """追加のみの移行。既存products/measurementsの構造・行は変更しない。"""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connection(db_path) as con:
+        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'measurements' in tables and {'cooking_sessions', 'cooking_ingredients', 'recipe_templates'} - tables:
+            from data_backup import backup_database
+            backup_database(db_path, label='cooking-tables')
         con.executescript('''
             CREATE TABLE IF NOT EXISTS cooking_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

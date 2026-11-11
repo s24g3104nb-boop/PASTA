@@ -83,3 +83,25 @@ render_weight_result(weight=50,product=dict(id=2,name='栄養未登録',g_per_st
     at.button(key='measurement_save').click().run()
     assert not at.exception and list_measurements(db)[0]['kcal'] is None
     assert at.button(key='measurement_to_diary')
+
+
+def test_legacy_metadata_backup_precedes_migration_and_backup_failure_blocks_change(tmp_path, monkeypatch):
+    import data_backup
+    db=tmp_path/'old.sqlite3'
+    with sqlite3.connect(db) as con:
+        con.execute('CREATE TABLE measurements(id INTEGER PRIMARY KEY, estimated_g REAL)')
+        con.execute('INSERT INTO measurements VALUES(1,50)')
+    backup=data_backup.backup_database
+    monkeypatch.setattr(data_backup,'backup_database',lambda *a,**k: (_ for _ in ()).throw(OSError('full')))
+    with pytest.raises(OSError):init_db(db)
+    with sqlite3.connect(db) as con:
+        assert [r[1] for r in con.execute('PRAGMA table_info(measurements)')]==['id','estimated_g']
+        assert con.execute('SELECT * FROM measurements').fetchall()==[(1,50)]
+    monkeypatch.setattr(data_backup,'backup_database',backup)
+    init_db(db)
+    files=list(tmp_path.glob('*.before-measurement-metadata-*.backup'))
+    assert len(files)==1
+    with sqlite3.connect(files[0]) as con:
+        assert [r[1] for r in con.execute('PRAGMA table_info(measurements)')]==['id','estimated_g']
+    init_db(db)
+    assert len(list(tmp_path.glob('*.before-measurement-metadata-*.backup')))==1

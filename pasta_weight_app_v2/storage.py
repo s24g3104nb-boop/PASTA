@@ -27,7 +27,17 @@ def _connect(db_path=DEFAULT_DB):
 
 
 def init_db(db_path=DEFAULT_DB):
+    additions = {
+        'archived': 'INTEGER NOT NULL DEFAULT 0',
+        'source_kind': "TEXT NOT NULL DEFAULT 'unknown'",
+        'estimator': "TEXT NOT NULL DEFAULT 'opencv'",
+        **{key: 'REAL' for key in ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')},
+    }
     with _connect(db_path) as con:
+        previous = {r['name'] for r in con.execute('PRAGMA table_info(measurements)')}
+        if previous and set(additions) - previous:
+            from data_backup import backup_database
+            backup_database(db_path, label='measurement-metadata')
         con.executescript('''
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,12 +64,6 @@ def init_db(db_path=DEFAULT_DB):
             );
         ''')
         existing = {r['name'] for r in con.execute('PRAGMA table_info(measurements)')}
-        additions = {
-            'archived': 'INTEGER NOT NULL DEFAULT 0',
-            'source_kind': "TEXT NOT NULL DEFAULT 'unknown'",
-            'estimator': "TEXT NOT NULL DEFAULT 'opencv'",
-            **{key: 'REAL' for key in ('g_per_strand', 'kcal_100', 'protein_100', 'fat_100', 'carb_100')},
-        }
         for name, declaration in additions.items():
             if name not in existing:
                 con.execute(f'ALTER TABLE measurements ADD COLUMN {name} {declaration}')
