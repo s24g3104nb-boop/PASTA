@@ -1,0 +1,7 @@
+-r ../../pasta_weight_app_v2/requirements.txt
+# Direct runtime versions verified in a fresh Python 3.12 environment.
+streamlit==1.67.0
+opencv-python-headless==4.14.0.94
+numpy==2.5.4
+Pillow==12.3.0
+pandas==2.3.3
