@@ -2,6 +2,7 @@
 import argparse
 from pathlib import Path
 import hashlib,json,shutil,subprocess,zipfile
+from datetime import datetime,timedelta,timezone
 
 APP='pasta_weight_app_v2'
 DENIED_PARTS={'data','user_data','__pycache__','.venv','.git','.pytest_cache','models','backups'}
@@ -13,8 +14,9 @@ def inputs(root):
         if (len(rel.parts)==2 or rel.parts[1] in {'pasta_ml','experiments','tests'}) and not set(rel.parts)&DENIED_PARTS and not path.is_symlink():files.append(rel)
     files += [Path(APP)/n for n in ('requirements.txt','requirements-dev.txt','requirements-research.txt','ui/design.css','sample_images/demo_spread_12.png','sample_images/demo_bundle_16.png')]
     files += [Path('.streamlit/config.toml')]
+    files += [Path('tools/check_safari_layout.py')]
     files += [Path('docs/assets/capture_sheet')/n for n in ('Pasta_Lens_A4_reference_v1.pdf','Pasta_Lens_A4_reference_v1.svg','geometry.json','README_JA.md')]
-    files += [Path('docs')/n for n in ('32_CAPTURE_COLLECTION_PLAN.md','35_UI_POLISH_REPORT.md','36_MANUAL_WEIGHT_RECOVERY.md','37_INTEGRATION_RELEASE.md')]
+    files += [Path('docs')/n for n in ('32_CAPTURE_COLLECTION_PLAN.md','35_UI_POLISH_REPORT.md','36_MANUAL_WEIGHT_RECOVERY.md','37_INTEGRATION_RELEASE.md','38_DENSE_WEIGHT_DIAGNOSIS.md')]
     return sorted(set(files))
 
 
@@ -36,7 +38,7 @@ def build(root,output):
     requirements=(root/'packaging/windows/requirements.txt').read_text().replace('-r ../../pasta_weight_app_v2/requirements.txt', '-r pasta_weight_app_v2/requirements.txt')
     (output/'requirements.txt').write_text(requirements)
     shutil.copy2(root/'packaging/windows/.gitignore',output/'.gitignore')
-    info=dict(date='2026-11-11',branch=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),source=('working_tree_including_uncommitted_changes' if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip() else 'committed_tree'),personal_data_included=False,models_included=False)
+    info=dict(date=datetime.now(timezone(timedelta(hours=9))).date().isoformat(),branch=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),source=('working_tree_including_uncommitted_changes' if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip() else 'committed_tree'),personal_data_included=False,models_included=False)
     (output/'RELEASE_INFO.json').write_text(json.dumps(info,ensure_ascii=False,indent=2))
     from importlib.metadata import version
     (output/'TESTED_VERSIONS.txt').write_text('Linux/Python3.12 verification environment; NOT a Windows lock file\n'+'\n'.join(n+'=='+version(n) for n in ('streamlit','opencv-python-headless','numpy','Pillow','pandas'))+'\n')

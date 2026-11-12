@@ -145,3 +145,27 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[role="combobox"
  .st-key-nutrition_cards [data-testid="stMetric"] {padding:12px 4px;}
  [data-testid="stImage"] img {max-height:420px;}
 }
+
+/* The severity surface is a nested role=alert, not the stAlert wrapper.
+   Give the rendered surface and inline Markdown their own contrast-safe tokens. */
+:root {--pl-alert-bg:#fff4cf;--pl-alert-text:#493511;--pl-alert-link:#245b3e;--pl-alert-code-bg:#eddfb1;--pl-alert-border:#ad873c;}
+:root:has(.pl-theme-dark) {--pl-alert-bg:#3b3120;--pl-alert-text:#fff0cc;--pl-alert-link:#c7e6d1;--pl-alert-code-bg:#51442e;--pl-alert-border:#c4a45a;}
+@media(prefers-color-scheme:dark) {:root:has(.pl-theme-auto) {--pl-alert-bg:#3b3120;--pl-alert-text:#fff0cc;--pl-alert-link:#c7e6d1;--pl-alert-code-bg:#51442e;--pl-alert-border:#c4a45a;}}
+.stApp [data-testid="stAlert"],
+.stApp [data-testid="stAlert"] :is([role="alert"],[role="status"]) {background:var(--pl-alert-bg);color:var(--pl-alert-text);border-radius:18px;}
+.stApp [data-testid="stAlert"] :is([role="alert"],[role="status"]) {border:1px solid var(--pl-alert-border);}
+.stApp [data-testid="stAlert"] :is(p,strong,em,li,span) {color:var(--pl-alert-text)!important;}
+.stApp [data-testid="stAlert"] a {color:var(--pl-alert-link)!important;text-decoration:underline;}
+.stApp [data-testid="stAlert"] :is(code,pre) {background:var(--pl-alert-code-bg);color:var(--pl-alert-text)!important;overflow-wrap:anywhere;}
+
+/* A fixed bar can cover a warning or input in the middle of any form even
+   when its final row has enough padding. Native navigation stays in document flow
+   at every width, including phone landscape and software-keyboard layouts. */
+.st-key-main_nav {position:static;inset:auto;transform:none;width:min(560px,100%);margin:0 auto var(--pl-space-sm);box-shadow:none;}
+.block-container {padding-bottom:calc(32px + env(safe-area-inset-bottom));}
+.stApp :is(input,textarea,button,[role="alert"],[role="status"]) {scroll-margin-block:24px;}
+@media(max-width:640px), (max-height:600px) {
+ .st-key-main_nav {position:static;inset:auto;transform:none;width:100%;margin:0 0 var(--pl-space-sm);padding:8px 12px;border-radius:18px;box-shadow:none;}
+ .block-container {padding-bottom:calc(32px + env(safe-area-inset-bottom));}
+ .stApp :is(input,textarea,button,[role="alert"]) {scroll-margin-block:24px;}
+}

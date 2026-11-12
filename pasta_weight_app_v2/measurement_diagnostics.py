@@ -15,7 +15,7 @@ def spread_rejection(mask):
         if cv2.contourArea(contour)<100:continue
         short,long=sorted(cv2.minAreaRect(contour)[1])
         if long>0 and short/long>.04:
-            reasons.append('接触・重なり、または背景混入の疑いがあります。麺を1本ずつ離し、無地の背景で再撮影してください。')
+            reasons.append('接触・密集・重なり、または背景混入の疑いがあり、この本数方式では重さを算出できません。1本重量の校正だけでは補正できないため、麺を離して全体を再撮影してください。')
             break
     return reasons
 
