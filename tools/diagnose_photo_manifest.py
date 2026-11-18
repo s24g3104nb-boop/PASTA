@@ -37,6 +37,31 @@ def photo_spec(record):
     return path, weight, count
 
 
+def manifest_records(manifest):
+    """Normalize the two supplied manifest schemas without inferring labels."""
+    if 'photos' in manifest and 'images' in manifest:
+        raise ValueError('Ambiguous manifest schemas')
+    if 'images' in manifest:
+        records = []
+        for image in manifest['images']:
+            weight = image.get('weight_g_user_reported')
+            count = image.get('strand_count_user_reported')
+            if weight is None and count is None:
+                raise ValueError('A weight or count label is required')
+            label = (dict(kind='strand_count', value=count, weight_g=weight) if count is not None else
+                     dict(kind='measured_weight_g', value=weight))
+            records.append(dict(filename=image['filename'], zip_path=image['file'],
+                                sha256=image['image_sha256'], label=label, group=image.get('set'),
+                                expected_bytes=image.get('bytes')))
+        expected = manifest.get('images_count', len(records))
+    else:
+        records = manifest['photos']
+        expected = manifest.get('n_images', len(records))
+    if expected != len(records):
+        raise ValueError('Image count does not match manifest')
+    return records
+
+
 def run(manifest_path, images, output, calibration=None):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'pasta_weight_app_v2'))
     from pasta_vision import image_to_rgb, detect_spread, image_quality_warnings
@@ -48,9 +73,7 @@ def run(manifest_path, images, output, calibration=None):
     if output.exists() or output.is_relative_to(images):
         raise ValueError('Use a new output folder outside the original image folder')
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    records = manifest['photos']
-    if manifest.get('n_images', len(records)) != len(records):
-        raise ValueError('Image count does not match manifest')
+    records = manifest_records(manifest)
     names = [r['filename'] for r in records]
     if len(names) != len(set(names)) or any(Path(n).name != n or n in ('.','..') for n in names):
         raise ValueError('Unsafe or duplicate filename')

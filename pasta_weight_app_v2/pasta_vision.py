@@ -142,7 +142,21 @@ def detect_spread(
     if finite_nonnegative(min_area, '最小面積') <= 0 or finite_nonnegative(min_elongation, '細長さ') < 1:
         raise ValueError('最小面積は正数、細長さは1以上にしてください。')
     raw = _yellow_mask(rgb, saturation_min, value_min)
-    mask = _close_mask(raw)
+    return analyze_spread_mask(rgb, raw, min_area=min_area, min_elongation=min_elongation)
+
+
+def analyze_spread_mask(rgb, raw, *, min_area=160, min_elongation=3.0, close=True):
+    """Analyze an explicitly supplied experimental mask with the normal count rules.
+
+    Normal capture supplies its original HSV mask. Alternative masks remain
+    offline candidates and do not select or activate a production algorithm.
+    """
+    if (not isinstance(raw, np.ndarray) or raw.dtype != np.uint8 or raw.ndim != 2
+            or raw.shape != rgb.shape[:2] or not np.isin(raw, [0, 255]).all()):
+        raise ValueError('Mask must be binary uint8 with the same image dimensions')
+    if finite_nonnegative(min_area, '最小面積') <= 0 or finite_nonnegative(min_elongation, '細長さ') < 1:
+        raise ValueError('Invalid component thresholds')
+    mask = _close_mask(raw) if close else raw.copy()
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     overlay = rgb.copy()
     count = 0

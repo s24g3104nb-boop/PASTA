@@ -74,3 +74,16 @@ def test_manifest_traversal_is_rejected_before_output(tmp_path):
     with pytest.raises(ValueError,match='Unsafe'):
         module.run(manifest,source,tmp_path/'result')
     assert not (tmp_path/'result').exists()
+
+
+def test_images_schema_keeps_explicit_weight_count_and_path():
+    book=dict(images_count=1,images=[dict(filename='x.jpeg',file='photos/x.jpeg',
+        weight_g_user_reported=120,strand_count_user_reported=None,image_sha256='0'*64,bytes=100)])
+    row=module.manifest_records(book)[0]
+    path,weight,count=module.photo_spec(row)
+    assert str(path)=='photos/x.jpeg' and weight==120 and count is None
+    book['images_count']=2
+    import pytest
+    with pytest.raises(ValueError,match='count'):module.manifest_records(book)
+    book['photos']=[]
+    with pytest.raises(ValueError,match='Ambiguous'):module.manifest_records(book)
