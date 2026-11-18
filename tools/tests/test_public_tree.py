@@ -6,7 +6,8 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 
 def test_private_paths_and_synthetic_exceptions():
-    for path in ('user_data/a.txt','photos/user.heic','research/model.joblib','a.sqlite3-wal','private.env/.env'):
+    for path in ('user_data/a.txt','photos/user.heic','research/model.joblib','a.sqlite3-wal','private.env/.env',
+                 'logs/runtime.txt','pasta_lens.log','pasta_lens.log.1'):
         assert module.unsafe(path)
     assert not module.unsafe('pasta_weight_app_v2/sample_images/demo_spread_12.png')
     assert not module.unsafe('docs/assets/capture_sheet/Pasta_Lens_A4_reference_v1.pdf')

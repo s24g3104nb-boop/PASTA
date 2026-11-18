@@ -13,6 +13,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+if __package__:
+    from .operation_logs import NUTRITION, logged_operation
+else:
+    from operation_logs import NUTRITION, logged_operation
+
 
 @dataclass
 class DetectionResult:
@@ -291,6 +296,7 @@ def _endface_evidence(mask, circles, min_radius):
     return evidence
 
 
+@logged_operation(NUTRITION, '乾麺の栄養計算')
 def nutrition_for_weight(weight_g: float, kcal_100: float, protein_100: float,
                          fat_100: float, carb_100: float) -> dict:
     scale = finite_nonnegative(weight_g, '重量') / 100.0

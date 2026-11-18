@@ -1,8 +1,8 @@
 import sqlite3
-import logging
 import streamlit as st
 from storage import list_products, save_product
 from ui_shell import resume_capture
+from operation_logs import RECORDS, WEIGHT, log_error, log_info
 
 
 def select_measurement_product(products, label, key, *, using_demo=False):
@@ -54,7 +54,7 @@ def render_products():
     try:
         products_for_edit = list_products()
     except (OSError, sqlite3.Error):
-        logging.exception('Unable to load products for calibration')
+        log_error(WEIGHT, '製品の校正情報の読み込み 失敗')
         st.error('製品情報を開けませんでした。ほかの画面で保存中の場合は少し待って、読み直してください。')
         if st.button('製品情報を読み直す', key='editor_products_retry'):
             st.rerun()
@@ -100,6 +100,7 @@ def render_products():
                 raise ValueError('校正用の実測重量は0gより大きい値を入力してください。')
             saved = save_product(name, g_per_strand, kc, pr, fa, ca,
                                  product_id=selected or None, expected_product=previous)
+            log_info(RECORDS, '製品・校正情報の保存 完了')
             st.session_state['last_product_id'] = saved['id']
             st.session_state['next_product_editor_id'] = saved['id']
             notice = f'次の測定では「{saved["name"]}」を選択します。'
@@ -110,6 +111,7 @@ def render_products():
                 if selected == original_id or origin == (st.session_state.get('capture_generation'), original_id):
                     # Only the product changes; keep the original photo and its counted regions.
                     request['product'] = saved
+                    request.pop('_logged_estimate_outcome', None)
                     notice = f'測定画面に戻ると「{saved["name"]}」の登録値で重さを確認できます。'
             st.session_state['product_saved_notice'] = notice
             st.rerun()
@@ -118,7 +120,7 @@ def render_products():
         except sqlite3.IntegrityError:
             st.error('同じ名前の製品が登録されています。既存の製品を選んで更新するか、別の名前にしてください。')
         except (OSError,sqlite3.Error):
-            logging.exception('Unable to save product')
+            log_error(RECORDS, '製品・校正情報の保存 失敗')
             st.error('保存できませんでした。入力内容は残っています。空き容量やファイルの使用状況を確認して、もう一度保存してください。')
 
 

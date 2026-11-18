@@ -6,6 +6,7 @@ import sqlite3
 from storage import DEFAULT_DB
 from data_backup import backup_database
 from meal_photos import prepare_photo, persist_photo, photo_path as _photo_path
+from operation_logs import RECORDS, logged_operation
 
 ADDITIONS = {'meal_type': "TEXT NOT NULL DEFAULT ''", 'measurement_id': 'INTEGER',
  'cooking_session_id':'INTEGER', 'measurement_snapshot_json':'TEXT',
@@ -40,6 +41,7 @@ def _decode(row):
 def photo_path(key,db=DEFAULT_DB):return _photo_path(key,db)
 
 
+@logged_operation(RECORDS, '食事記録の読み込み', report_success=False)
 def get(ident,db=DEFAULT_DB):
     initialize(db)
     with sqlite3.connect(db) as c:
@@ -47,6 +49,7 @@ def get(ident,db=DEFAULT_DB):
         return _decode(c.execute('SELECT * FROM meal_entries WHERE id=? AND deleted=0',(ident,)).fetchone())
 
 
+@logged_operation(RECORDS, '食事日記の読み込み', report_success=False)
 def entries(db=DEFAULT_DB):
     initialize(db)
     with sqlite3.connect(db) as c:
@@ -79,6 +82,7 @@ def _sources(c,measurement_id,cooking_session_id):
     return measurement_id,snapshot,status,source,nutrition
 
 
+@logged_operation(RECORDS, '食事記録の保存・編集')
 def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',measurement_id=None,
          cooking_session_id=None,edit=False,expected_updated_at=None,remove_photo=False):
     if not isinstance(ident,str) or not ident or len(ident)>128:raise ValueError('記録の識別情報を確認してください。')
@@ -127,6 +131,7 @@ def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',me
         raise
 
 
+@logged_operation(RECORDS, '食事記録の削除処理')
 def delete(ident,db=DEFAULT_DB,expected_updated_at=None):
     initialize(db)
     with sqlite3.connect(db) as c:

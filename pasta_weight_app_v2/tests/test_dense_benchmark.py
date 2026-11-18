@@ -48,10 +48,11 @@ def test_calibrated_recovery_does_not_send_user_back_to_calibration():
     from streamlit.testing.v1 import AppTest
     script="""
 import sys
+from unittest.mock import patch
 sys.path.insert(0,'pasta_weight_app_v2')
 import manual_weight_ui
-manual_weight_ui.render_manual_weight=lambda *a,**k:None
-manual_weight_ui.recovery(dict(id=1,name='synthetic fixture',g_per_strand=.68),None)
+with patch.object(manual_weight_ui,'render_manual_weight'):
+    manual_weight_ui.recovery(dict(id=1,name='synthetic fixture',g_per_strand=.68),None)
 """
     at=AppTest.from_string(script).run()
     assert not at.exception

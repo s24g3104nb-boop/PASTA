@@ -4,9 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 import hashlib
-import logging
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import streamlit as st
 
 from pasta_vision import detect_bundle_ends, detect_spread, image_to_rgb
@@ -16,6 +15,7 @@ from measurement_ui import render_weight_result, render_regression_measurement
 from settings_ui import open_calibration, select_measurement_product
 from pasta_vision import image_quality_warnings
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
+from operation_logs import WEIGHT, log_error, log_info
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
@@ -68,8 +68,11 @@ def render_capture():
     try:
         preview = image_to_rgb(photo)
         st.session_state['capture_photo']=photo
-    except Exception:
-        logging.exception('Unable to decode capture image')
+    except Exception as exc:
+        if isinstance(exc, (UnidentifiedImageError, Image.DecompressionBombError, ValueError)):
+            log_info(WEIGHT, '写真入力を見送り')
+        else:
+            log_error(WEIGHT, '写真の読み込み 失敗')
         st.error('写真を読み込めませんでした。JPEGまたはPNG（25MB・2500万画素以下）を選び直してください。iPhoneのHEIC写真はJPEGに変換してください。')
         st.button('写真を選び直す',key='decode_retake',on_click=start_capture,args=('写真をアップロード',),width='stretch')
         st.button('はかりで測った重さを記録する',key='decode_manual',on_click=start_manual_weight,width='stretch')
@@ -80,7 +83,7 @@ def render_capture():
     try:
         products = list_products()
     except (OSError,sqlite3.Error):
-        logging.exception('Unable to load capture products')
+        log_error(WEIGHT, '製品情報の読み込み 失敗')
         st.error('製品情報を開けませんでした。写真は保持しています。少し待って、もう一度お試しください。')
         if st.button('製品情報を読み直す',key='products_retry'):st.rerun()
         return
@@ -111,6 +114,7 @@ def render_capture():
         try:
             active_model = get_active_model()
         except (OSError, ValueError, sqlite3.Error):
+            log_error(WEIGHT, '選択したモデルの読み込み 失敗')
             model_error = '読み込みに失敗しました。開発・検証ツールで確認してください。'
     parameters = (dict(st.session_state.get('research_spread', DEFAULT_SPREAD)) if developer else dict(DEFAULT_SPREAD)) if mode == '広げた状態' else ((dict(st.session_state.get('research_bundle', DEFAULT_BUNDLE)) if developer else dict(DEFAULT_BUNDLE)) if mode == '束の断面' else {})
 
@@ -191,6 +195,12 @@ def _count_diagnostic(result, product, mode, using_demo):
     return decision, manual_count is not None
 
 
+def _log_estimate_outcome(request, outcome):
+    if request.get('_logged_estimate_outcome') != outcome:
+        log_info(WEIGHT, outcome)
+        request['_logged_estimate_outcome'] = outcome
+
+
 def render_results(request):
     from manual_weight_ui import recovery
     rgb=request['rgb']; product=request['product']; mode=request['mode']
@@ -203,7 +213,7 @@ def render_results(request):
         try:
             product = get_product(product['id'])
         except (OSError, sqlite3.Error):
-            logging.exception('Unable to refresh product calibration for this measurement')
+            log_error(WEIGHT, '校正情報の読み直し 失敗')
             st.error('選んだ製品の校正値を読み込めません。写真は保持しています。少し待って製品情報を読み直してください。')
             if st.button('製品情報を読み直す', key='result_product_retry'):
                 st.rerun()
@@ -213,6 +223,7 @@ def render_results(request):
             return
         if product != request['product']:
             request['product'] = product
+            request.pop('_logged_estimate_outcome', None)
             st.session_state['capture_product_refreshed'] = True
             # Discard an in-flight save click intended for the previous calibration.
             st.rerun()
@@ -221,6 +232,7 @@ def render_results(request):
     if not using_demo:
         problems=image_quality_warnings(rgb)
         if problems:
+            _log_estimate_outcome(request, '画質を確認して重量推定を見送り')
             st.warning(' '.join(problems))
             if not using_regression:
                 _unfinished_count_diagnostic(product, '画像の明るさ・大きさ・ピントを確認してください。')
@@ -231,14 +243,17 @@ def render_results(request):
         if request['model_error']:
             st.error(f"モデルを読み込めません: {request['model_error']}")
         elif request['active_model'] is None:
+            _log_estimate_outcome(request, '有効なモデルがなく重量推定を見送り')
             st.warning('有効なモデルがありません。設定のAI学習管理でモデルを学習・選択してください。')
         else:
             with st.spinner('画像を解析しています…'):
                 try:
                     succeeded = render_regression_measurement(request['active_model'],rgb=rgb,product=product,mode=mode,using_demo=using_demo,show_image=False)
                 except Exception:
-                    logging.exception('Unable to run the selected regression model')
+                    log_error(WEIGHT, '回帰による重量推定 失敗')
                     st.warning('重量を推定できませんでした。実測入力で記録するか、写真を選び直してください。')
+                else:
+                    _log_estimate_outcome(request, '回帰による重量推定 完了' if succeeded else '回帰による重量推定を見送り')
         if not succeeded:recovery(product,rgb,synthetic=using_demo)
         return
     try:
@@ -252,27 +267,37 @@ def render_results(request):
             # Keep this private result in this session only, not a shared cache.
             request['_detection_result']=result
     except Exception:
-        logging.exception('Unable to detect strands in the capture image')
+        log_error(WEIGHT, '乾麺の本数検出 失敗')
         st.error('本数の検出を完了できませんでした。再試行するか、写真・設定を変更してください。')
         _unfinished_count_diagnostic(product, '本数の検出処理でエラーが発生しました。')
         if st.button('再試行する'):st.rerun()
         recovery(product,rgb,synthetic=using_demo)
         return
-    decision, manual = _count_diagnostic(result, product, mode, using_demo)
+    try:
+        decision, manual = _count_diagnostic(result, product, mode, using_demo)
+    except Exception:
+        log_error(WEIGHT, '検出本数による重量計算 失敗')
+        st.error('写真の重量を計算できませんでした。写真・設定を見直すか、実測重量を入力してください。')
+        recovery(product, rgb, synthetic=using_demo)
+        return
     st.session_state['dev_last_detection'] = dict(
         overlay=result.overlay_rgb, mask=result.mask, count=result.count, parameters=request['parameters'],
         product_name=product['name'], calibration=decision.calibration_g_per_strand,
         reasons=decision.reasons, weight_g=decision.weight_g, manual=manual, using_demo=using_demo)
     if decision.weight_g is None:
+        _log_estimate_outcome(request, '検出結果・校正条件を確認して重量推定を見送り')
         st.warning('重量を計算できません。' + ' '.join(decision.reasons))
         recovery(product, rgb, synthetic=using_demo)
         return
 
     if manual:
+        _log_estimate_outcome(request, '手入力の本数による重量計算 完了')
         st.success('入力した本数から重量を計算しました。')
     elif using_demo:
+        _log_estimate_outcome(request, 'CGサンプルの重量計算 完了')
         st.success('CGサンプルの重量計算ができました。')
     else:
+        _log_estimate_outcome(request, '検出本数による重量計算 完了')
         st.success('写真の検出本数と製品の校正値から重量を推定しました。')
     estimator = 'manual_count' if manual else 'opencv'
     diagnostics = trace(rgb, estimator=estimator, product=product, mode=mode,

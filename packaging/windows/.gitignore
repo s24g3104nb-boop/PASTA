@@ -10,3 +10,5 @@ user_data/
 *.db
 *.backup
 *.log
+*.log.*
+**/logs/

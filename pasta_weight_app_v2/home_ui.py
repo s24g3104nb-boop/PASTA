@@ -1,10 +1,10 @@
 """Two everyday actions and recent meals; measurements stay a separate concept."""
-import logging
 import sqlite3
 import streamlit as st
 from meal_diary import entries, photo_path
 from diary_ui import start_diary, open_diary_entry
 from ui_shell import hero, empty_state, start_capture, resume_capture, start_manual_weight
+from operation_logs import RECORDS, log_error
 
 
 def render_home():
@@ -31,8 +31,7 @@ def render_home():
     st.subheader('最近食べたパスタ')
     try:
         rows = entries()
-    except (OSError, sqlite3.Error):
-        logging.exception('Unable to read recent meals')
+    except (OSError, sqlite3.Error, ValueError):
         st.error('記録を読み込めませんでした。少し待ってから、記録画面で再試行してください。')
         return
     if not rows:
@@ -42,7 +41,7 @@ def render_home():
             try:
                 path = photo_path(row['photo']) if row['photo'] else None
             except (OSError,ValueError):
-                logging.warning('Unable to resolve recent meal photo')
+                log_error(RECORDS, '最近の食事写真の参照 失敗')
                 path = None
             shown=False
             try:
@@ -50,7 +49,7 @@ def render_home():
                     st.image(str(path), width='stretch')
                     shown=True
             except (OSError,ValueError):
-                logging.warning('Unable to display recent meal photo')
+                log_error(RECORDS, '最近の食事写真の表示 失敗')
             if not shown:
                 empty_state('🍝', '写真なしの記録')
             st.subheader(row['dish_name'])

@@ -5,6 +5,11 @@ from dataclasses import asdict, dataclass
 import math
 from typing import Mapping, Sequence
 
+if __package__:
+    from .operation_logs import NUTRITION, logged_operation
+else:
+    from operation_logs import NUTRITION, logged_operation
+
 
 NUTRIENT_KEYS = ('kcal', 'protein_g', 'fat_g', 'carb_g')
 
@@ -74,6 +79,7 @@ def dry_snapshot(record: Mapping) -> dict:
             'nutrition_source': nutrition_source}
 
 
+@logged_operation(NUTRITION, '材料と取り分けの栄養計算')
 def calculate_meal(snapshot: Mapping, ingredients: Sequence[Ingredient], *,
                    servings: int | None = None, consumed_fraction: float | None = None,
                    nutrition_basis: str = 'confirmed_amounts') -> dict:

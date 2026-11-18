@@ -1,5 +1,7 @@
 # 06 テスト・受入確認計画
 
+INFO・ERROR運用ログと第9回の単体テストを参照できます。 [操作ログと単体テストの仕様](42_OPERATION_LOGS.md)
+
 ## 既存の自動テスト（確認済）
 2026-10-28、本パッケージの元コードで `pytest -q tests/test_core.py` を実行し **4 passed**：
 - `test_sample_spread`：CGの独立した広げ麺12本を検出。

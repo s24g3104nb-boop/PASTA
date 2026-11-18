@@ -3,8 +3,10 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from storage import DEFAULT_DB
+from operation_logs import RECORDS, logged_operation
 
 
+@logged_operation(RECORDS, '測定履歴の変更')
 def change_measurement(ident, *, actual_g=None, archive=False, db_path=DEFAULT_DB):
     if not archive:
         import math

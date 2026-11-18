@@ -10,8 +10,10 @@ from PIL import Image
 import numpy as np
 try:
     from .pasta_vision import finite_nonnegative
+    from .operation_logs import RECORDS, logged_operation
 except ImportError:
     from pasta_vision import finite_nonnegative
+    from operation_logs import RECORDS, logged_operation
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('PASTA_DATA_DIR', str(BASE_DIR / 'data'))).resolve()
@@ -117,6 +119,7 @@ def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
         return dict(con.execute('SELECT * FROM products WHERE id=?', (product_id,)).fetchone())
 
 
+@logged_operation(RECORDS, '測定履歴の保存')
 def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_g,
                      nutrition, image_rgb, db_path=DEFAULT_DB, source_kind='unknown',
                      estimator='opencv', product_snapshot=None, diagnostics=None,
@@ -212,6 +215,7 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
         raise
 
 
+@logged_operation(RECORDS, '測定履歴の読み込み', report_success=False)
 def list_measurements(db_path=DEFAULT_DB):
     with _connect(db_path) as con:
         return [dict(row) for row in con.execute(

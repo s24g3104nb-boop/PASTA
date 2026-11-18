@@ -16,7 +16,7 @@ def inputs(root):
     files += [Path('.streamlit/config.toml')]
     files += [Path('tools/check_safari_layout.py'), Path('tools/diagnose_photo_manifest.py')]
     files += [Path('docs/assets/capture_sheet')/n for n in ('Pasta_Lens_A4_reference_v1.pdf','Pasta_Lens_A4_reference_v1.svg','geometry.json','README_JA.md')]
-    files += [Path('docs')/n for n in ('32_CAPTURE_COLLECTION_PLAN.md','35_UI_POLISH_REPORT.md','36_MANUAL_WEIGHT_RECOVERY.md','37_INTEGRATION_RELEASE.md','38_DENSE_WEIGHT_DIAGNOSIS.md','39_WEIGHT_DISPLAY_FIX.md','41_SINGLE_PHOTO_NEXT.md')]
+    files += [Path('docs')/n for n in ('32_CAPTURE_COLLECTION_PLAN.md','35_UI_POLISH_REPORT.md','36_MANUAL_WEIGHT_RECOVERY.md','37_INTEGRATION_RELEASE.md','38_DENSE_WEIGHT_DIAGNOSIS.md','39_WEIGHT_DISPLAY_FIX.md','41_SINGLE_PHOTO_NEXT.md','42_OPERATION_LOGS.md')]
     return sorted(set(files))
 
 

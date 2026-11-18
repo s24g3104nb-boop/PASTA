@@ -4,7 +4,6 @@ from __future__ import annotations
 import calendar
 from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
-import logging
 import sqlite3
 import uuid
 
@@ -15,7 +14,7 @@ from meal_diary import delete, entries, get, photo_path, save
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
 
-LOGGER = logging.getLogger(__name__)
+from operation_logs import RECORDS, log_error
 JST = timezone(timedelta(hours=9))
 MEAL_TYPES = ['', '朝食', '昼食', '夕食', '間食', 'その他']
 NUTRITION_LABELS = {
@@ -146,7 +145,7 @@ def _photo(row, db_path, *, preview=False):
                 st.image(str(path), width='stretch')
                 return
         except (ValueError, OSError):
-            LOGGER.warning('Diary photo could not be opened', exc_info=True)
+            log_error(RECORDS, '保存済み食事写真の読み込み 失敗')
         st.caption('写真を開けませんでした。記録の内容は確認できます。')
     if not preview:
         st.markdown('<div class="pl-meal-placeholder" role="img" aria-label="料理写真なし">'
@@ -300,7 +299,6 @@ def _render_editor(db_path):
     try:
         _link_options(draft, db_path)
     except (sqlite3.Error, OSError, ValueError):
-        LOGGER.warning('Meal source records unavailable', exc_info=True)
         st.warning('関連する記録を読み込めません。接続先の保存領域を確認して、もう一度お試しください。')
     st.caption('写真AIによるカロリー推定は準備中です。写真だけでは材料や分量を判断できません。')
     if st.button('食事記録を保存', key='meal_save', type='primary', width='stretch', disabled=not valid_photo):
@@ -321,7 +319,6 @@ def _render_editor(db_path):
         except ValueError as exc:
             st.error(str(exc))
         except (sqlite3.Error, OSError):
-            LOGGER.warning('Meal save failed; draft retained', exc_info=True)
             st.error('保存できませんでした。入力内容は残っています。保存先の空き容量や接続を確認し、もう一度保存してください。')
 
 
@@ -363,7 +360,6 @@ def _render_detail(rows, db_path):
             except ValueError as exc:
                 st.error(str(exc))
             except (sqlite3.Error, OSError):
-                LOGGER.warning('Meal delete failed', exc_info=True)
                 st.error('削除できませんでした。記録は残っています。もう一度お試しください。')
 
 
@@ -476,7 +472,6 @@ def render_diary(db_path=DEFAULT_DB):
     try:
         rows = entries(db_path)
     except (sqlite3.Error, OSError, ValueError):
-        LOGGER.warning('Meal diary unavailable', exc_info=True)
         st.error('記録を読み込めませんでした。保存先を確認して、もう一度お試しください。入力途中の内容は保持しています。')
         if st.button('もう一度読み込む', key='diary_retry'):
             st.rerun()

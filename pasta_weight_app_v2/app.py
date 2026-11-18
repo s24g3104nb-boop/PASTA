@@ -1,9 +1,9 @@
 """Pasta Lens: everyday diary and measurement, with research tools in settings."""
 from pathlib import Path
-import logging
 import sqlite3
 import streamlit as st
 from storage import init_db, DATA_DIR
+from operation_logs import RECORDS, configure_operation_log, log_error
 from generate_demo import generate_images
 from ui_shell import shell, PAGES, persist_appearance
 from home_ui import render_home
@@ -15,10 +15,11 @@ from settings_ui import render_products, render_guide
 from developer_ui import render_developer_tools
 
 st.set_page_config(page_title='Pasta Lens | ひと皿を、思い出に。',page_icon='🍝',layout='centered')
+configure_operation_log(DATA_DIR)
 try:
     init_db()
 except (OSError, sqlite3.Error):
-    logging.exception('Pasta Lens database initialization failed')
+    log_error(RECORDS, '記録データの初期化 失敗')
     st.error('データを開けませんでした。ほかのアプリで使用中の場合は閉じ、再試行してください。')
     if st.button('再試行する'):
         st.rerun()

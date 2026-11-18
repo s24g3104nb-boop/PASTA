@@ -12,6 +12,7 @@ import sqlite3
 from cooking import Ingredient, calculate_meal, dry_snapshot, nonnegative
 from dish_classifier import DISH_NAMES
 from storage import DEFAULT_DB
+from operation_logs import RECORDS, logged_operation
 
 
 @contextmanager
@@ -68,6 +69,7 @@ def init_cooking_db(db_path=DEFAULT_DB):
         ''')
 
 
+@logged_operation(RECORDS, '料理の計算結果の保存')
 def save_cooking_session(*, measurement_id: int, selected_dish: str,
                         confirmed_same_batch: bool, ingredients: list[Ingredient],
                         servings: int | None = None, consumed_fraction: float | None = None,
@@ -126,6 +128,7 @@ def save_cooking_session(*, measurement_id: int, selected_dish: str,
         return session_id
 
 
+@logged_operation(RECORDS, '料理の計算履歴の読み込み', report_success=False)
 def list_cooking_sessions(db_path=DEFAULT_DB) -> list[dict]:
     init_cooking_db(db_path)
     with _connection(db_path) as con:

@@ -23,8 +23,9 @@ def has_secret(content):
 
 def unsafe(path):
     p=PurePosixPath(path)
-    if any(part.lower() in {'data','user_data','pasta_lens_private_dataset','pasta_lens_42_photos','user_photos','meal_photos','backups','models'} for part in p.parts):return True
+    if any(part.lower() in {'data','user_data','pasta_lens_private_dataset','pasta_lens_42_photos','user_photos','meal_photos','backups','models','logs'} for part in p.parts):return True
     if '.sqlite3-' in p.name:return True
+    if p.name.lower().endswith('.log') or '.log.' in p.name.lower():return True
     if p.name.startswith('.env') or p.name in {'secrets.toml','id_rsa','id_ed25519'}:return True
     if p.suffix.lower()=='.csv':return path not in ALLOWED_CSV
     return p.suffix.lower() in DENIED_SUFFIX and path not in ALLOWED_IMAGES

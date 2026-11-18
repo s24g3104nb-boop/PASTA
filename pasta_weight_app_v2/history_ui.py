@@ -42,21 +42,29 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
                         change_measurement(row['id'],actual_g=actual,db_path=db_path)
                         st.session_state['history_feedback']='実測重量を保存しました。'
                         st.rerun()
-                    except (ValueError,sqlite3.Error) as exc:st.error(str(exc))
+                    except ValueError as exc:st.error(str(exc))
+                    except (OSError, sqlite3.Error):
+                        st.error('重量の変更を保存できませんでした。入力値を確認し、もう一度お試しください。')
             confirm=st.checkbox('この履歴を一覧から削除する',key=f"delete_confirm_{row['id']}")
             if st.button('削除を確定',disabled=not confirm,key=f"delete_{row['id']}"):
                 try:
                     change_measurement(row['id'],archive=True,db_path=db_path)
                     st.session_state['history_feedback']='履歴を一覧から削除しました。元データは監査用に保持されています。'
                     st.rerun()
-                except (ValueError,sqlite3.Error) as exc:st.error(str(exc))
+                except ValueError as exc:st.error(str(exc))
+                except (OSError, sqlite3.Error):
+                    st.error('履歴を削除できませんでした。少し待ってから、もう一度お試しください。')
 
 
 def render_history(db_path=DEFAULT_DB):
     st.title('あなたの記録')
     st.caption('ひと皿ずつ、振り返ろう。')
     if st.session_state.get('history_feedback'):st.success(st.session_state.pop('history_feedback'))
-    rows=list_measurements(db_path)
+    try:
+        rows=list_measurements(db_path)
+    except (OSError, sqlite3.Error):
+        st.error('履歴を読み込めませんでした。保存先を確認し、開き直してください。')
+        return
     if not rows:
         empty_state('最初の記録を残そう','ホームからパスタを撮影して、結果を保存してください。')
         return
