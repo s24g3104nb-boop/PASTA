@@ -11,7 +11,6 @@ import hashlib
 import html
 import json
 import platform
-import sys
 
 import cv2
 import numpy as np
@@ -74,16 +73,20 @@ def write_csv(path,rows):
         writer.writerows({k:json.dumps(v,ensure_ascii=False) if isinstance(v,(dict,list,tuple)) else v for k,v in row.items()} for row in rows)
 
 
-def fit_models(records,images,out):
+def regression_model_factories():
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LinearRegression,Ridge
     from sklearn.ensemble import RandomForestRegressor,GradientBoostingRegressor
-    from sklearn.metrics import mean_absolute_error,mean_squared_error
-    models=dict(linear=lambda:make_pipeline(StandardScaler(),LinearRegression()),
+    return dict(linear=lambda:make_pipeline(StandardScaler(),LinearRegression()),
         ridge=lambda:make_pipeline(StandardScaler(),Ridge(alpha=10.)),
         random_forest=lambda:RandomForestRegressor(n_estimators=100,min_samples_leaf=2,random_state=42,n_jobs=1),
         gradient_boosting=lambda:GradientBoostingRegressor(n_estimators=100,max_depth=2,min_samples_leaf=2,random_state=42))
+
+
+def fit_models(records,images,out):
+    from sklearn.metrics import mean_absolute_error,mean_squared_error
+    models=regression_model_factories()
     train=[r for r in records if r['reported_g'] is not None]
     features={r['image_id']:regression_features(images[r['image_id']]) for r in records}
     variants={}
@@ -114,16 +117,15 @@ def fit_models(records,images,out):
     return fits,predictions
 
 
-def run(datasets,output):
-    sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+def load_diagnostic_entries(datasets, output):
+    """Load the unchanged manifests and verify each original before analysis."""
     from tools.diagnose_photo_manifest import manifest_records,photo_spec
-    out=Path(output).resolve()
-    if out.exists():raise FileExistsError('Use a new output folder')
     entries=[];seen=set()
     for dataset in datasets:
         root=Path(dataset).resolve()
-        if out.is_relative_to(root):raise ValueError('Output must be separate from originals')
-        raw=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+        if Path(output).resolve().is_relative_to(root):raise ValueError('Output must be separate from originals')
+        source=(root/'manifest.json').read_bytes()
+        raw=json.loads(source.decode('utf-8-sig'))
         for record in manifest_records(raw):
             relative,weight,count=photo_spec(record);path=root.joinpath(*relative.parts)
             if not path.resolve().is_relative_to(root) or path.is_symlink():raise ValueError('Unsafe original')
@@ -131,7 +133,15 @@ def run(datasets,output):
             if digest!=record['sha256']:raise ValueError('Original SHA mismatch')
             if digest in seen:raise ValueError('Duplicate originals require explicit review')
             seen.add(digest)
-            entries.append(dict(path=path,record=record,reported_g=weight,reported_count=count,sha256=digest))
+            entries.append(dict(path=path,record=record,reported_g=weight,reported_count=count,sha256=digest,
+                                dataset_root=root, manifest_sha256=hashlib.sha256(source).hexdigest()))
+    return entries
+
+
+def run(datasets,output):
+    out=Path(output).resolve()
+    if out.exists():raise FileExistsError('Use a new output folder')
+    entries=load_diagnostic_entries(datasets,out)
     out.mkdir(parents=True);(out/'images').mkdir();cv2.setNumThreads(1)
     rows=[];frames={};cards=[]
     for number,entry in enumerate(entries):
@@ -163,7 +173,7 @@ def run(datasets,output):
         rows.append(row)
         cards.append(_card(row))
     fits,predictions=fit_models(rows,frames,out)
-    report=dict(version=VERSION,originals_verified=len(rows),unique_originals=len(seen),independent_evaluation_groups=0,
+    report=dict(version=VERSION,originals_verified=len(rows),unique_originals=len(entries),independent_evaluation_groups=0,
         independent_mae_g=None,independent_rmse_g=None,models_activated=False,
         rows=rows,regression_fits=fits,feature_groups=FEATURE_GROUPS,parameters=PARAMETERS,
         versions=dict(python=platform.python_version(),numpy=np.__version__,opencv=cv2.__version__),

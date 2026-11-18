@@ -114,3 +114,48 @@ def test_sufficient_declared_dense_trials_can_pass_screen_but_not_auto_deploy():
     predictions=[dict(image_id=r['image_id'],predicted_g=r['measured_g']) for r in records if assignment[r['image_id']]=='test']
     result=independent_evaluation(records,assignment,materials,predictions,model_card=card)
     assert result['proposed_adoption_gate']['passed'] and not result['production_approved']
+
+
+def test_heavy_weight_and_angle_strata_with_separate_derivative_metrics():
+    r,a,m,c=manifest()
+    r[2].update(measured_g=160.4, nominal_weight_g=160, tilt_deg=15, distance_cm=55)
+    c['split_manifest_sha256']=validate_split(r,a,m)['split_manifest_sha256']
+    result=independent_evaluation(r,a,m,[dict(image_id='image2',predicted_g=162.4,
+        transformed_predictions={'resize50':165.4,'rotate90':None})],model_card=c,target_weights_g=(120,160,200))
+    assert result['by_nominal_weight']['160']['mae_g'] == pytest.approx(2.)
+    assert result['by_angle']['15']['success_rate'] == 1
+    assert result['overall']['attempts'] == 1 and result['by_distance']['55']['accepted'] == 1
+    assert result['transformed_prediction_drift']['resize50']['max_absolute_delta_g'] == pytest.approx(3.)
+    assert result['transformed_prediction_drift']['rotate90']['changed_to_rejected'] == 1
+    assert 'insufficient_test_samples_at_120g' in result['proposed_adoption_gate']['reasons']
+
+
+def test_validation_cannot_be_presented_as_an_independent_test():
+    from pasta_weight_app_v2.experiments.weight_evaluation import validation_evaluation
+    r,a,m,c=manifest();c.pop('frozen_before_test')
+    result=validation_evaluation(r,a,m,[dict(image_id='image1',predicted_g=42)],model_card=c)
+    assert result['scope']=='validation' and 'proposed_adoption_gate' not in result
+    assert result['overall']['mae_g']==2
+    with pytest.raises(ValueError,match='provenance'):
+        independent_evaluation(r,a,m,[dict(image_id='image2',predicted_g=42)],model_card=c)
+
+
+def test_derivative_cannot_be_counted_as_a_second_test_photo():
+    records, assignments, materials, card = manifest()
+    records.append(dict(records[2], image_id='rotated'))
+    assignments['rotated'] = 'test'
+    card['split_manifest_sha256'] = validate_split(records, assignments, materials)['split_manifest_sha256']
+    predictions = [dict(image_id=image_id, predicted_g=40) for image_id in ('image2', 'rotated')]
+    with pytest.raises(ValueError, match='Repeated original'):
+        independent_evaluation(records, assignments, materials, predictions, model_card=card)
+
+
+def test_same_sample_cannot_inflate_multiple_weight_strata():
+    records, assignments, materials, card = manifest()
+    records.append(dict(records[2], image_id='second_view', original_id='second_original',
+                        original_sha256='e'*64, nominal_weight_g=50))
+    assignments['second_view'] = 'test'
+    card['split_manifest_sha256'] = validate_split(records, assignments, materials)['split_manifest_sha256']
+    predictions = [dict(image_id=image_id, predicted_g=40) for image_id in ('image2', 'second_view')]
+    with pytest.raises(ValueError, match='multiple nominal weight strata'):
+        independent_evaluation(records, assignments, materials, predictions, model_card=card)

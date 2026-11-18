@@ -23,7 +23,7 @@ def runtime_parameters():
     """Read literal UI defaults without importing Streamlit/training modules."""
     path=Path(__file__).resolve().parents[1]/'developer_ui.py'
     result={}
-    for node in ast.parse(path.read_text()).body:
+    for node in ast.parse(path.read_text(encoding='utf-8')).body:
         if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('DEFAULT_SPREAD','DEFAULT_BUNDLE'):
             if not isinstance(node.value,ast.Call) or not isinstance(node.value.func,ast.Name) or node.value.func.id!='dict':raise ValueError('Review changed runtime configuration')
             result[node.targets[0].id]={k.arg:ast.literal_eval(k.value) for k in node.value.keywords}
