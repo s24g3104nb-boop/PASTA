@@ -14,7 +14,7 @@ def inputs(root):
         if (len(rel.parts)==2 or rel.parts[1] in {'pasta_ml','experiments','tests'}) and not set(rel.parts)&DENIED_PARTS and not path.is_symlink():files.append(rel)
     files += [Path(APP)/n for n in ('requirements.txt','requirements-dev.txt','requirements-research.txt','ui/design.css','sample_images/demo_spread_12.png','sample_images/demo_bundle_16.png')]
     files += [Path('.streamlit/config.toml')]
-    files += [Path('tools/check_safari_layout.py')]
+    files += [Path('tools/check_safari_layout.py'), Path('tools/diagnose_photo_manifest.py')]
     files += [Path('docs/assets/capture_sheet')/n for n in ('Pasta_Lens_A4_reference_v1.pdf','Pasta_Lens_A4_reference_v1.svg','geometry.json','README_JA.md')]
     files += [Path('docs')/n for n in ('32_CAPTURE_COLLECTION_PLAN.md','35_UI_POLISH_REPORT.md','36_MANUAL_WEIGHT_RECOVERY.md','37_INTEGRATION_RELEASE.md','38_DENSE_WEIGHT_DIAGNOSIS.md','39_WEIGHT_DISPLAY_FIX.md')]
     return sorted(set(files))
