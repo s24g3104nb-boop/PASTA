@@ -41,7 +41,8 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                                   product['fat_100'], product['carb_100']) if has_nutrition(product, allow_demo=using_demo) else None
     st.subheader('あなたのパスタ')
     with st.container(key='weight_hero'):
-        st.metric('推定重量', f'{weight:.1f} g')
+        label = '入力した本数からの重量' if estimator == 'manual_count' else '推定重量'
+        st.metric(label, f'{weight:.1f} g')
     if nutrit is not None:
         st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
         with st.container(key='nutrition_cards'):
@@ -82,6 +83,10 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                              product_snapshot=snapshot_for_nutrition(product, allow_demo=using_demo), db_path=db_path,diagnostics=diagnostics,
                              submission_token=token)
             st.session_state['measurement_saved_results'][token] = {'id': saved_id}
+            request = st.session_state.get('result_request')
+            if request and request['product']['id'] == product['id']:
+                # Returning to a saved result must show the calibration printed on that receipt.
+                request['saved_product'] = dict(product)
             _remember_actual(token)
             st.rerun()
         except (OSError, ValueError, sqlite3.Error):

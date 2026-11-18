@@ -33,3 +33,5 @@ python -m venv .venv
 構成・設計資料は `docs/`、今回の統合・検証・復旧手順は `docs/37_INTEGRATION_RELEASE.md` に記載します。実際のiPhone Safari、Windows、印刷したA4用紙での確認はブラウザ自動検証と区別してください。
 
 密集写真の重量推定は未解決です。[2026-11-12の診断・比較と追加撮影計画](docs/38_DENSE_WEIGHT_DIAGNOSIS.md)を参照してください。独立試料で未検証の回帰モデルは標準推定に採用していません。
+
+製品の新規登録・校正更新後の重量表示と写真診断の修正は [2026-11-18の報告](docs/39_WEIGHT_DISPLAY_FIX.md) を参照してください。

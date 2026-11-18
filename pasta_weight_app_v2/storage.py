@@ -79,23 +79,42 @@ def list_products(db_path=DEFAULT_DB):
         return [dict(r) for r in con.execute('SELECT * FROM products ORDER BY id')]
 
 
+def get_product(product_id, db_path=DEFAULT_DB):
+    with _connect(db_path) as con:
+        row = con.execute('SELECT * FROM products WHERE id=?', (product_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+
 def save_product(name, g_per_strand, kcal_100, protein_100, fat_100, carb_100,
-                 *, product_id=None, db_path=DEFAULT_DB):
+                 *, product_id=None, db_path=DEFAULT_DB, expected_product=None):
+    """Return the persisted row so a registration can select its exact product ID."""
     if not name.strip():
         raise ValueError('商品名を入力してください。')
+    if name.strip().startswith('デモ用'):
+        raise ValueError('「デモ用」はサンプルの名前です。実際に使用する製品名を入力してください。')
     for v in (g_per_strand, kcal_100, protein_100, fat_100, carb_100):
         finite_nonnegative(v, '重量・栄養情報')
     with _connect(db_path) as con:
         if product_id is None:
-            con.execute('''INSERT INTO products
+            cursor = con.execute('''INSERT INTO products
                 (name, g_per_strand, kcal_100, protein_100, fat_100, carb_100)
                 VALUES (?, ?, ?, ?, ?, ?)''',
                 (name.strip(), g_per_strand, kcal_100, protein_100, fat_100, carb_100))
+            product_id = cursor.lastrowid
         else:
+            con.execute('BEGIN IMMEDIATE')
+            previous = con.execute('SELECT * FROM products WHERE id=?', (product_id,)).fetchone()
+            if previous is None:
+                raise ValueError('この製品が見つかりません。編集する製品を選び直してください。')
+            if previous['name'].startswith('デモ用'):
+                raise ValueError('実際の測定には「新しい製品を登録」で製品と校正値を登録してください。')
+            if expected_product is not None and dict(previous) != expected_product:
+                raise ValueError('ほかの画面で製品情報が変更されています。最新の値を確認してから保存してください。')
             con.execute('''UPDATE products SET name=?, g_per_strand=?, kcal_100=?,
                 protein_100=?, fat_100=?, carb_100=? WHERE id=?''',
                 (name.strip(), g_per_strand, kcal_100, protein_100, fat_100, carb_100,
-                 int(product_id)))
+                 product_id))
+        return dict(con.execute('SELECT * FROM products WHERE id=?', (product_id,)).fetchone())
 
 
 def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_g,

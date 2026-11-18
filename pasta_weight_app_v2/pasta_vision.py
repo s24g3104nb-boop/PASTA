@@ -21,6 +21,7 @@ class DetectionResult:
     mask: np.ndarray
     description: str
     warnings: List[str]
+    evidence: dict | None = None
 
 
 def image_to_rgb(file_or_image, max_side: int = 1400) -> np.ndarray:
@@ -72,11 +73,26 @@ def image_quality_warnings(rgb: np.ndarray) -> list[str]:
     warnings = []
     if min(rgb.shape[:2]) < 64:
         warnings.append('画像が小さすぎます。乾麺を大きく撮り直してください。')
-    if gray.mean() < 15:
+    laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+    dark = gray.mean() < 15
+    washed_out = gray.mean() > 245 and gray.std() < 8
+    blurred = laplacian.var() < 3
+    if dark or washed_out or blurred:
+        # A small number of sharp strands can occupy <1% of a black tray.
+        # Recheck the visible colour region and its edges at the same thresholds.
+        # This only allows the detector to run; it does not certify a strand count.
+        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+        candidate = cv2.inRange(hsv, (7, 12, 60), (45, 255, 255))
+        if cv2.countNonZero(candidate) >= 160:
+            region = cv2.dilate(candidate, np.ones((3, 3), np.uint8)) > 0
+            local = gray[region]
+            if local.mean() >= 15 and local.std() >= 8 and laplacian[region].var() >= 3:
+                return warnings
+    if dark:
         warnings.append('暗すぎて判別できません。明るさを改善して再撮影してください。')
-    elif gray.mean() > 245 and gray.std() < 8:
+    elif washed_out:
         warnings.append('白飛びまたは対象がほとんど見えません。露出と背景を変えてください。')
-    if cv2.Laplacian(gray, cv2.CV_64F).var() < 3:
+    if blurred:
         warnings.append('輪郭を確認できません。ピントを合わせて再撮影してください。')
     return warnings
 
@@ -92,8 +108,26 @@ def _yellow_mask(rgb: np.ndarray, saturation_min: int, value_min: int) -> np.nda
     # 黄色〜クリーム色の麺（赤いソース・食品には非対応）。
     low = np.array([7, saturation_min, value_min], dtype=np.uint8)
     high = np.array([45, 255, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, low, high)
-    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    return cv2.inRange(hsv, low, high)
+
+
+def _close_mask(raw):
+    return cv2.morphologyEx(raw, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+
+def _closing_joined_strands(component, raw, min_area):
+    """Did closing join two substantial pieces that both extend along the strand?
+
+    Two end-to-end fragments cannot both span more than half the component
+    along its longer image axis. Never use the fragments to guess a new count.
+    """
+    before = cv2.bitwise_and(component, raw)
+    if np.array_equal(before, component):
+        return False
+    stats = cv2.connectedComponentsWithStats(before, connectivity=8)[2][1:]
+    axis = cv2.CC_STAT_WIDTH if raw.shape[1] >= raw.shape[0] else cv2.CC_STAT_HEIGHT
+    long_pieces = (stats[:, cv2.CC_STAT_AREA] >= min_area) & (2 * stats[:, axis] > max(raw.shape))
+    return np.count_nonzero(long_pieces) > 1
 
 
 def detect_spread(
@@ -107,14 +141,26 @@ def detect_spread(
     """広げた麺が互いに接していないとき、独立した細長い領域を数える。"""
     if finite_nonnegative(min_area, '最小面積') <= 0 or finite_nonnegative(min_elongation, '細長さ') < 1:
         raise ValueError('最小面積は正数、細長さは1以上にしてください。')
-    mask = _yellow_mask(rgb, saturation_min, value_min)
+    raw = _yellow_mask(rgb, saturation_min, value_min)
+    mask = _close_mask(raw)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     overlay = rgb.copy()
-    valid = []
+    count = 0
     non_elongated = 0
+    cropped = 0
+    wide = 0
+    merged = 0
+    small_area = 0
+    smallest_counted_area = None
     for index in range(1, n):
         x, y, width, height, area = (int(v) for v in stats[index])
+        at_border = x == 0 or y == 0 or x + width == mask.shape[1] or y + height == mask.shape[0]
+        # Discount isolated specks, while retaining long, cropped fragments
+        # even if they fall below the area required for a counted strand.
+        if at_border and (area >= min_area or max(width, height) >= math.sqrt(min_area)):
+            cropped += 1
         if area < min_area:
+            small_area += area
             continue
         # 回転した麺にも対応するため、外接矩形ではなく最小面積回転矩形を使用。
         ys, xs = np.where(labels[y:y+height, x:x+width] == index)
@@ -123,21 +169,30 @@ def detect_spread(
         pts = np.column_stack((xs + x, ys + y)).astype(np.float32)
         rect = cv2.minAreaRect(pts)
         shorter, longer = sorted(rect[1])
+        if longer > 0 and shorter / longer > .04:
+            wide += 1
         elongation = longer / max(1.0, shorter)
         if elongation < min_elongation:
             non_elongated += 1
             continue
-        valid.append((x, y, width, height, area))
+        count += 1
+        smallest_counted_area = area if smallest_counted_area is None else min(smallest_counted_area, area)
+        component = (labels[y:y+height, x:x+width] == index).astype(np.uint8) * 255
+        if _closing_joined_strands(component, raw[y:y+height, x:x+width], min_area):
+            merged += 1
         cv2.rectangle(overlay, (x, y), (x + width, y + height), (255, 76, 76), 2)
-        cv2.putText(overlay, str(len(valid)), (x, max(16, y - 5)),
+        cv2.putText(overlay, str(count), (x, max(16, y - 5)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.53, (255, 240, 35), 2, cv2.LINE_AA)
 
     warnings = ["検出領域を1本として数える試験方式です。麺の交差・接触・影で誤差が出ます。"]
-    if len(valid) == 0:
+    if count == 0:
         warnings.append("細長い乾麺を検出できませんでした。暗い無地の背景で、1本ずつ離して撮影してください。")
     if non_elongated > 0:
         warnings.append(f"形が細長くない{non_elongated}個の領域は除外しました。")
-    return DetectionResult(len(valid), overlay, mask, "独立した細長い黄色領域の数", warnings)
+    evidence = dict(mode='spread', wide_regions=wide, cropped_regions=cropped,
+                    closing_merged_regions=merged, small_region_pixels=small_area,
+                    smallest_counted_area=smallest_counted_area, excluded_regions=non_elongated)
+    return DetectionResult(count, overlay, mask, "独立した細長い黄色領域の数", warnings, evidence)
 
 
 def detect_bundle_ends(
@@ -160,7 +215,7 @@ def detect_bundle_ends(
         raise ValueError('円検出パラメータは正数にしてください。')
     if min_radius >= max_radius:
         raise ValueError("min_radius は max_radius より小さくしてください")
-    mask = _yellow_mask(rgb, saturation_min, value_min)
+    mask = _close_mask(_yellow_mask(rgb, saturation_min, value_min))
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     # 穏やかな平滑化: 断面のエッジを残す。
     blur = cv2.GaussianBlur(gray, (5, 5), 1.15)
@@ -188,7 +243,38 @@ def detect_bundle_ends(
     warnings = ["束の先端に見える円だけを数えます。隠れた麺・傾斜・照明で大きな誤差が出る場合があります。"]
     if not found:
         warnings.append("断面を検出できませんでした。束の端面を真正面から大きく撮影し、検出設定を調整してください。")
-    return DetectionResult(len(found), overlay, mask, "見つかった円形の断面数（試験方式）", warnings)
+    evidence = _endface_evidence(mask, found, min_radius)
+    return DetectionResult(len(found), overlay, mask, "見つかった円形の断面数（試験方式）", warnings, evidence)
+
+
+def _endface_evidence(mask, circles, min_radius):
+    """Check whether the fitted discs account for the visible coloured surface."""
+    evidence = dict(mode='bundle_end', cropped_regions=0, endface_coverage=0.,
+                    unsupported_discs=0, unresolved_endface=False)
+    if not circles:
+        return evidence
+    covered = np.zeros_like(mask)
+    height, width = mask.shape
+    for x, y, radius in circles:
+        if min(x - radius, y - radius, width - 1 - x - radius, height - 1 - y - radius) <= 0:
+            evidence['cropped_regions'] += 1
+        # The edge detector uses a 5x5 blur. Allow its two-pixel boundary band.
+        cv2.circle(covered, (x, y), radius + 2, 255, -1)
+        core = max(1, radius - 2)
+        left, top = max(0, x - core), max(0, y - core)
+        patch = mask[top:min(height, y + core + 1), left:min(width, x + core + 1)]
+        yy, xx = np.ogrid[:patch.shape[0], :patch.shape[1]]
+        inside = (xx + left - x) ** 2 + (yy + top - y) ** 2 <= core ** 2
+        if np.count_nonzero(patch[inside]) < .5 * np.count_nonzero(inside):
+            evidence['unsupported_discs'] += 1
+    residual = cv2.bitwise_and(mask, cv2.bitwise_not(covered))
+    evidence['endface_coverage'] = 1 - cv2.countNonZero(residual) / max(1, cv2.countNonZero(mask))
+    # A missing whole face can be small relative to a large bundle; a global
+    # coverage fraction alone would accept it. Inspect local residuals too.
+    if cv2.countNonZero(residual):
+        distance = cv2.distanceTransform(residual, cv2.DIST_L2, 5)
+        evidence['unresolved_endface'] = bool(distance.max() >= max(1, min_radius - 2))
+    return evidence
 
 
 def nutrition_for_weight(weight_g: float, kcal_100: float, protein_100: float,

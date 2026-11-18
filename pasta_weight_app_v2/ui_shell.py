@@ -59,5 +59,6 @@ def persist_appearance():
 
 
 def _nav_changed():
+    st.session_state.pop('calibration_origin', None)
     if st.session_state.get('main_nav') == 'ホーム':
         st.session_state.pop('capture_source', None)

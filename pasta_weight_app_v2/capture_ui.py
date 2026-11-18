@@ -10,11 +10,12 @@ from PIL import Image
 import streamlit as st
 
 from pasta_vision import detect_bundle_ends, detect_spread, image_to_rgb
-from storage import list_products
+from storage import get_product, list_products
 from training_manager import get_active_model
 from measurement_ui import render_weight_result, render_regression_measurement
+from settings_ui import open_calibration, select_measurement_product
 from pasta_vision import image_quality_warnings
-from measurement_diagnostics import weight_gate,trace
+from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
@@ -86,21 +87,19 @@ def render_capture():
     product_ids = {p['id']: p for p in products}
     if not product_ids:
         st.info('使用する製品を登録してください。写真は保持しています。')
-        st.button('製品を登録する',key='capture_add_product',
-            on_click=lambda:st.session_state.update(main_nav='設定',settings_section='製品・校正'))
+        st.button('製品を登録する', key='capture_add_product', on_click=open_calibration)
         return
-    if 'which_product' not in st.session_state and st.session_state.get('last_product_id') in product_ids:
-        st.session_state['which_product']=st.session_state['last_product_id']
-    p_id = st.selectbox('重量・栄養計算に使う製品',
-                        options=list(product_ids),
-                        format_func=lambda n: product_ids[n]['name'], key='which_product')
-    product = product_ids[p_id]
-    st.session_state['last_product_id']=p_id
+    product = select_measurement_product(product_ids, '重量・栄養計算に使う製品', 'which_product', using_demo=using_demo)
+    if product is None:
+        st.info('使った製品を選ぶと、この写真を解析できます。')
+        return
     if product['name'].startswith('デモ用'):
         st.warning('現在の製品データは**仮の数値**です。実際の重量・カロリーではありません。'
                    '設定の「製品・校正」で自分の製品を登録してください。')
-    elif product['g_per_strand'] <= 0:
+    elif strand_calibration(product) is None:
         st.info('この製品は重量の校正が未設定です。推定できない場合も、はかりで測った重さを入力して保存できます。')
+    if not using_demo and (product['name'].startswith('デモ用') or strand_calibration(product) is None):
+        st.button('製品を登録・校正する', key='capture_calibration', on_click=open_calibration, args=(product,))
 
     from developer_ui import DEFAULT_SPREAD, DEFAULT_BUNDLE
     developer = st.session_state.get('dev_tools_enabled', False)
@@ -121,7 +120,7 @@ def render_capture():
         recovery(product,preview,synthetic=using_demo)
         return
     if st.button('この写真で解析する', type='primary', width='stretch', key='analyze_photo'):
-        for key in ('override_count','manual_count','actual_known'):
+        for key in ('override_count','manual_count','actual_known','dev_last_detection'):
             st.session_state.pop(key,None)
         st.session_state['result_request']=dict(rgb=preview,photo=photo,product=product,mode=mode,
             using_demo=using_demo,using_regression=using_regression,active_model=active_model,
@@ -135,8 +134,61 @@ def edit_capture():
     if request:
         st.session_state['editing_photo']=request['photo']
         st.session_state['capture_mode']=request['mode']
-        st.session_state['which_product']=request['product']['id']
+        last_key = 'last_demo_product_id' if request['using_demo'] else 'last_product_id'
+        st.session_state[last_key] = request['product']['id']
         st.session_state['estimate_method']='学習モデル（実験用回帰）' if request['using_regression'] else 'OpenCV本数検出'
+
+
+def _diagnostic_product(product):
+    st.caption(f'使用製品：{product["name"]}')
+    calibration = strand_calibration(product)
+    if calibration is None:
+        st.caption('1本あたり：校正値が未設定です。')
+    elif product['name'].startswith('デモ用'):
+        st.caption(f'1本あたり：{calibration:.4f} g（デモ用の仮値）')
+    else:
+        st.caption(f'1本あたり：{calibration:.4f} g（製品に登録した校正値）')
+
+
+def _unfinished_count_diagnostic(product, reason):
+    with st.expander('写真と重量の診断'):
+        st.caption('写真：読み込み済み')
+        _diagnostic_product(product)
+        st.write('パスタの色の候補・自動検出：結果なし')
+        st.write(f'重量計算：未実行。{reason}')
+
+
+def _count_diagnostic(result, product, mode, using_demo):
+    """Use one decision for the displayed diagnosis, weight and save action."""
+    manual_count = None
+    with st.expander('写真と重量の診断'):
+        st.caption('写真：読み込み済み · OpenCVの本数検出を実行')
+        _diagnostic_product(product)
+        if st.session_state.get('dev_tools_enabled'):
+            st.metric(result.description, f'{result.count} 個')
+            if st.checkbox('誤検出があるので、本数を手動修正する', key='override_count'):
+                entered = st.number_input('実際に確認した本数', min_value=1,
+                                          value=None, step=1, key='manual_count')
+                # An empty correction means zero confirmed strands, never reuse the rejected count.
+                manual_count = entered if entered is not None else 0
+                st.caption('重量計算には手入力した本数を使います。')
+        decision = decide_count_weight(product, result, mode=mode, using_demo=using_demo,
+                                       manual_count=manual_count)
+        st.write(f'パスタの色の候補：{decision.foreground_pixels:,} / {decision.image_pixels:,} 画素')
+        st.write(f'自動検出：{decision.automatic_count} 本の候補')
+        if decision.weight_g is None:
+            st.write('重量計算：算出できませんでした。')
+            for reason in decision.reasons:
+                st.caption(reason)
+        else:
+            source = '入力した本数' if manual_count is not None else '検出候補'
+            st.write(f'重量計算：{source} {decision.used_count} 本 × '
+                     f'{decision.calibration_g_per_strand:.4f} g/本 = {decision.weight_g:.2f} g')
+        if st.checkbox('検出位置とマスクを見る', key='show_capture_mask'):
+            st.image(result.overlay_rgb, caption='赤枠・赤丸が数えた候補です。', width='stretch')
+            st.image(result.mask, caption='白は麺に近い色の領域です。背景の一部も含まれることがあります。',
+                     width='stretch')
+    return decision, manual_count is not None
 
 
 def render_results(request):
@@ -145,10 +197,33 @@ def render_results(request):
     using_demo=request['using_demo']; using_regression=request['using_regression']
     st.button('写真・設定を変更',icon=':material/arrow_back:',on_click=edit_capture,key='edit_capture')
     st.image(rgb,caption='解析した写真' + (' · CGサンプル' if using_demo else ''),width='stretch')
+    if 'saved_product' in request:
+        product = request['saved_product']
+    else:
+        try:
+            product = get_product(product['id'])
+        except (OSError, sqlite3.Error):
+            logging.exception('Unable to refresh product calibration for this measurement')
+            st.error('選んだ製品の校正値を読み込めません。写真は保持しています。少し待って製品情報を読み直してください。')
+            if st.button('製品情報を読み直す', key='result_product_retry'):
+                st.rerun()
+            return
+        if product is None:
+            st.warning('選んだ製品が見つかりません。「写真・設定を変更」からお使いの製品を選び直してください。')
+            return
+        if product != request['product']:
+            request['product'] = product
+            st.session_state['capture_product_refreshed'] = True
+            # Discard an in-flight save click intended for the previous calibration.
+            st.rerun()
+    if st.session_state.pop('capture_product_refreshed', False):
+        st.info('製品情報が更新されました。新しい校正値による結果を確認してください。')
     if not using_demo:
         problems=image_quality_warnings(rgb)
         if problems:
             st.warning(' '.join(problems))
+            if not using_regression:
+                _unfinished_count_diagnostic(product, '画像の明るさ・大きさ・ピントを確認してください。')
             recovery(product,rgb,synthetic=using_demo)
             return
     if using_regression:
@@ -162,6 +237,7 @@ def render_results(request):
                 try:
                     succeeded = render_regression_measurement(request['active_model'],rgb=rgb,product=product,mode=mode,using_demo=using_demo,show_image=False)
                 except Exception:
+                    logging.exception('Unable to run the selected regression model')
                     st.warning('重量を推定できませんでした。実測入力で記録するか、写真を選び直してください。')
         if not succeeded:recovery(product,rgb,synthetic=using_demo)
         return
@@ -175,41 +251,37 @@ def render_results(request):
             # A request is replaced when its photo, placement or settings change.
             # Keep this private result in this session only, not a shared cache.
             request['_detection_result']=result
-    except Exception as exc:
-        st.error(f'画像を解析できませんでした。写真・設定を変更してください。')
+    except Exception:
+        logging.exception('Unable to detect strands in the capture image')
+        st.error('本数の検出を完了できませんでした。再試行するか、写真・設定を変更してください。')
+        _unfinished_count_diagnostic(product, '本数の検出処理でエラーが発生しました。')
         if st.button('再試行する'):st.rerun()
         recovery(product,rgb,synthetic=using_demo)
         return
-    st.caption('写真の検出処理を終えました。重量を計算できるか確認しています。')
-    st.session_state['dev_last_detection']=dict(overlay=result.overlay_rgb,mask=result.mask,count=result.count,parameters=request['parameters'])
-    override=False
-    detected_count=result.count
-    if st.session_state.get('dev_tools_enabled'):
-        with st.expander('検出の詳細・本数を修正'):
-            st.image(result.overlay_rgb,caption='検出箇所：赤枠 / 赤丸',width='stretch')
-            st.image(result.mask,caption='白い部分が検出対象',width='stretch')
-            st.metric(result.description,f'{result.count} 個')
-            for msg in result.warnings:st.caption('⚠️ '+msg)
-            override=st.checkbox('誤検出があるので、本数を手動修正する',key='override_count')
-            detected_count=st.number_input('実際に確認した本数',min_value=0,value=result.count,step=1,key='manual_count') if override else result.count
-            if override:st.caption('この値は手動入力です。AIが認識した結果ではありません。')
-    rejection=weight_gate(product,using_demo=using_demo,mode=mode,mask=result.mask,manual=override)
-    if rejection:
-        st.warning('重量を計算できません：' + ' '.join(rejection))
-        st.button('もう一度撮影',on_click=start_capture,args=('スマホで撮影',),key='rejection_retake',width='stretch')
-    elif product['g_per_strand']<=0:
-        st.warning('この製品の1本重量を設定の製品・校正で登録してください。')
-    elif detected_count<=0:
-        st.warning('本数を確認できませんでした。写真・設定を変更してください。')
-    else:
-        st.success('重量を推定しました（試験的な値です）。')
-        weight=detected_count*product['g_per_strand']
-        estimator='manual_count' if override else 'opencv'
-        render_weight_result(weight=weight,product=product,rgb=rgb,mode=mode,using_demo=using_demo,
-              detected_count=detected_count,estimator=estimator,
-            diagnostics=trace(rgb,estimator=estimator,product=product,mode=mode,raw_sha256=request['raw_sha256'],
-                parameters=dict(automatic_count=result.count,used_count=detected_count,detection=request['parameters'])),
-            explanation=f'計算：{detected_count}本 × {product["g_per_strand"]:.4f}g/本 = {weight:.2f}g。')
+    decision, manual = _count_diagnostic(result, product, mode, using_demo)
+    st.session_state['dev_last_detection'] = dict(
+        overlay=result.overlay_rgb, mask=result.mask, count=result.count, parameters=request['parameters'],
+        product_name=product['name'], calibration=decision.calibration_g_per_strand,
+        reasons=decision.reasons, weight_g=decision.weight_g, manual=manual, using_demo=using_demo)
+    if decision.weight_g is None:
+        st.warning('重量を計算できません。' + ' '.join(decision.reasons))
+        recovery(product, rgb, synthetic=using_demo)
+        return
 
-    if rejection or product['g_per_strand']<=0 or detected_count<=0:
-        recovery(product,rgb,synthetic=using_demo)
+    if manual:
+        st.success('入力した本数から重量を計算しました。')
+    elif using_demo:
+        st.success('CGサンプルの重量計算ができました。')
+    else:
+        st.success('写真の検出本数と製品の校正値から重量を推定しました。')
+    estimator = 'manual_count' if manual else 'opencv'
+    diagnostics = trace(rgb, estimator=estimator, product=product, mode=mode,
+                        raw_sha256=request.get('raw_sha256'), parameters=dict(
+                            automatic_count=decision.automatic_count, used_count=decision.used_count,
+                            foreground_pixels=decision.foreground_pixels, image_pixels=decision.image_pixels,
+                            detection=request['parameters']))
+    render_weight_result(weight=decision.weight_g, product=product, rgb=rgb, mode=mode,
+                         using_demo=using_demo, detected_count=decision.used_count, estimator=estimator,
+                         diagnostics=diagnostics,
+                         explanation=f'計算：{decision.used_count}本 × '
+                                     f'{decision.calibration_g_per_strand:.4f}g/本 = {decision.weight_g:.2f}g。')

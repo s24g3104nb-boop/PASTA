@@ -2,24 +2,78 @@ import sqlite3
 import logging
 import streamlit as st
 from storage import list_products, save_product
+from ui_shell import resume_capture
+
+
+def select_measurement_product(products, label, key, *, using_demo=False):
+    if not products:
+        return None
+    options = list(products)
+    last_key = 'last_demo_product_id' if using_demo else 'last_product_id'
+    preferred = st.session_state.get(last_key)
+    if preferred not in products:
+        preferred = options[0]
+        real_ids = [ident for ident, row in products.items() if not row['name'].startswith('デモ用')]
+        if real_ids and not using_demo:
+            preferred = real_ids[0] if len(real_ids) == 1 else None
+    if st.session_state.get(key) not in products:
+        st.session_state.pop(key, None)
+    ident = st.selectbox(label, options, index=options.index(preferred) if preferred is not None else None,
+                         placeholder='使った乾麺の製品を選択', key=key,
+                         format_func=lambda value: products[value]['name'])
+    if ident is not None:
+        st.session_state[last_key] = ident
+    return products.get(ident)
+
+
+def open_calibration(product=None):
+    """Choose the product from the photo, or an empty form for a demo replacement."""
+    ident = product['id'] if product else None
+    editor_id = ident if product and not product['name'].startswith('デモ用') else 0
+    st.session_state.update(
+        main_nav='設定', settings_section='製品・校正', next_product_editor_id=editor_id,
+        calibration_origin=(st.session_state.get('capture_generation'), ident),
+    )
+
+
+def _resume_after_calibration():
+    st.session_state.pop('calibration_origin', None)
+    resume_capture()
+
 
 def render_products():
-    if st.session_state.pop('product_saved_notice',False):
-        st.success('製品データを保存しました。測定を再開できます。')
-    if st.session_state.get('result_request'):
-        st.button('測定画面に戻る',key='calibration_return',on_click=lambda:st.session_state.update(main_nav='ホーム',capture_source='写真をアップロード'))
+    notice = st.session_state.pop('product_saved_notice', None)
+    if notice:
+        st.success(f'製品データを保存しました。{notice}' if isinstance(notice, str) else '製品データを保存しました。')
+    if st.session_state.get('result_request') or st.session_state.get('capture_photo') is not None:
+        st.button('測定画面に戻る', key='calibration_return', on_click=_resume_after_calibration)
     st.subheader('製品データの登録・更新')
     st.write('1本あたりの重量は、**同じ製品・長さの乾麺を例えば50本数え、'
              '電子はかりで測った総重量を50で割る**と求められます。'
              '栄養値は商品パッケージの「乾麺100gあたり」を入力してください。')
-    products_for_edit = list_products()
+    try:
+        products_for_edit = list_products()
+    except (OSError, sqlite3.Error):
+        logging.exception('Unable to load products for calibration')
+        st.error('製品情報を開けませんでした。ほかの画面で保存中の場合は少し待って、読み直してください。')
+        if st.button('製品情報を読み直す', key='editor_products_retry'):
+            st.rerun()
+        return
     mapping = {p['id']: p for p in products_for_edit}
+    next_editor = st.session_state.pop('next_product_editor_id', None)
+    if next_editor is not None:
+        st.session_state['product_edit_mode'] = next_editor if next_editor in mapping else 0
     selected = st.selectbox('編集する製品', options=[0] + list(mapping),
                             format_func=lambda p: '＋ 新しい製品を登録' if p == 0
                             else mapping[p]['name'], key='product_edit_mode')
     current = mapping.get(selected, {})
-    calibrate = st.checkbox('数えた本数と総重量から1本の重量を計算する', value=False)
-    with st.form('product_editor'):
+    if current.get('name', '').startswith('デモ用'):
+        st.info('これはサンプルの仮データです。「＋ 新しい製品を登録」を選んで、お使いの製品の校正値を入力してください。')
+        return
+    previous = st.session_state.get('product_editor_displayed')
+    st.session_state['product_editor_displayed'] = current
+    calibrate = st.checkbox('数えた本数と総重量から1本の重量を計算する', key=f'calibrate_from_units_{selected}')
+    with st.form(f'product_editor_{selected}'):
         name = st.text_input('製品名', value=current.get('name', ''),
                              placeholder='例：〇〇スパゲッティ 1.6mm')
         if calibrate:
@@ -44,15 +98,20 @@ def render_products():
         try:
             if calibrate and calib_w <= 0:
                 raise ValueError('校正用の実測重量は0gより大きい値を入力してください。')
-            save_product(name, g_per_strand, kc, pr, fa, ca,
-                         product_id=(selected or None))
-            request=st.session_state.get('result_request')
-            if request and request['product']['id']==selected:
-                # Resume with the new calibration/nutrition; the image analysis
-                # itself is unchanged. Historical records retain their snapshot.
-                request['product']=dict(current,name=name.strip(),g_per_strand=g_per_strand,
-                    kcal_100=kc,protein_100=pr,fat_100=fa,carb_100=ca)
-            st.session_state['product_saved_notice']=True
+            saved = save_product(name, g_per_strand, kc, pr, fa, ca,
+                                 product_id=selected or None, expected_product=previous)
+            st.session_state['last_product_id'] = saved['id']
+            st.session_state['next_product_editor_id'] = saved['id']
+            notice = f'次の測定では「{saved["name"]}」を選択します。'
+            request = st.session_state.get('result_request')
+            origin = st.session_state.pop('calibration_origin', None)
+            if request and 'saved_product' not in request:
+                original_id = request['product']['id']
+                if selected == original_id or origin == (st.session_state.get('capture_generation'), original_id):
+                    # Only the product changes; keep the original photo and its counted regions.
+                    request['product'] = saved
+                    notice = f'測定画面に戻ると「{saved["name"]}」の登録値で重さを確認できます。'
+            st.session_state['product_saved_notice'] = notice
             st.rerun()
         except ValueError as err:
             st.error(str(err))
