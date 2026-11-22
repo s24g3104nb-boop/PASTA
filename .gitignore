@@ -41,3 +41,9 @@ __pycache__/
 
 # Local distribution runtime data
 **/user_data/
+
+# Optional local vision assets and private model/annotation outputs
+*.safetensors
+*.annotation.json
+**/foundation-private/
+**/admin_data/

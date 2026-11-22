@@ -41,7 +41,7 @@ render_cooking_tab(db)
     at.checkbox[0].check()
     at.checkbox[1].check()
     at.number_input[0].set_value(2)
-    at.button[0].click().run(timeout=15)
+    at.button(key='cooking_save_1').click().run(timeout=15)
     assert not at.exception
     assert not at.error
     assert any('保存しました' in item.value for item in at.success)
@@ -88,10 +88,10 @@ render_cooking_tab(db)
     assert at.number_input[0].value == 2
     at.checkbox[0].check()
     at.checkbox[1].check()
-    at.button[0].click().run(timeout=15)
+    at.button(key='cooking_save_1').click().run(timeout=15)
     assert any('仮分量を確認' in item.value for item in at.error)
     at.checkbox[2].check()
-    at.button[0].click().run(timeout=15)
+    at.button(key='cooking_save_1').click().run(timeout=15)
     assert not at.exception
     assert not at.error
     with sqlite3.connect(db) as con:
@@ -100,4 +100,4 @@ render_cooking_tab(db)
     assert result['portion']['kcal'] == 300
     assert result['nutrition_basis'] == 'template_estimate'
     assert result['recipe_template']['name'] == '試験レシピ'
-    assert any('利用者登録レシピに基づく概算' in item.value for item in at.warning)
+    assert any('参考レシピに基づく概算' in item.value for item in at.warning)

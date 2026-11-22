@@ -5,7 +5,7 @@ from pathlib import Path
 def test_upload_shortcut_and_shared_sheet_guide(tmp_path):
     script=r'''
 from streamlit.testing.v1 import AppTest
-at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=20).run()
+at=AppTest.from_string("import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd()/'pasta_weight_app_v2')); from app_runtime import render_application; render_application(admin=True)", default_timeout=20).run()
 assert not at.exception
 assert not any(b.key=='sheet_guide_download' for b in at.get('download_button'))
 at.button(key='home_upload').click().run()

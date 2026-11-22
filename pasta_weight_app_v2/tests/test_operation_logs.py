@@ -81,6 +81,7 @@ import streamlit as st
 from capture_ui import render_results
 render_results(st.session_state['result_request'])
 ''', default_timeout=15)
+    app.session_state['_app_admin'] = True
     app.session_state['result_request'] = dict(
         rgb=sample_rgb(dense=dense), product=product, mode='広げた状態',
         using_demo=False, using_regression=False, parameters={})

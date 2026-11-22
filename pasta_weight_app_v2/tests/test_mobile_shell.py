@@ -9,7 +9,7 @@ from streamlit.testing.v1 import AppTest
 def test_navigation_theme_and_retake(tmp_path):
     script=r'''
 from streamlit.testing.v1 import AppTest
-at=AppTest.from_file('pasta_weight_app_v2/app.py').run()
+at=AppTest.from_string("import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd()/'pasta_weight_app_v2')); from app_runtime import render_application; render_application(admin=True)", default_timeout=20).run()
 assert not at.exception
 assert not any(w.key=='training_upload' for w in at.get('file_uploader'))
 at.radio(key='main_nav').set_value('設定').run()

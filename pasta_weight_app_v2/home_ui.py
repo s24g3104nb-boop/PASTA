@@ -15,22 +15,25 @@ def render_home():
     hero()
     with st.container(key='home_actions'):
         st.button('乾麺の重さをはかる', icon=':material/photo_camera:', type='primary',
-                  width='stretch', on_click=start_capture, args=('スマホで撮影',), key='home_camera')
-        st.button('食べたパスタを記録する', icon=':material/restaurant:', width='stretch',
+                  width='stretch', on_click=start_capture, args=('写真をアップロード',), key='home_camera')
+        st.button('完成した料理を記録する', icon=':material/restaurant:', width='stretch',
                   on_click=start_diary, key='home_meal')
     if st.session_state.get('capture_photo') is not None or st.session_state.get('result_request'):
         st.button('途中の測定を再開する', key='home_resume_capture', width='stretch', on_click=resume_capture)
-    with st.expander('写真を選ぶ・はかりの数値を記録する'):
+    with st.expander('カメラを開く・はかりの数値を記録する'):
         st.button('撮影済みの写真から選ぶ', icon=':material/photo_library:', width='stretch',
                   on_click=start_capture, args=('写真をアップロード',), key='home_upload')
+        st.button('ブラウザでカメラを開く', icon=':material/photo_camera:', width='stretch',
+                  on_click=start_capture, args=('スマホで撮影',), key='home_camera_direct')
         st.caption('電子はかりで測った重さは、写真なしでも保存できます。画像からの推定は行いません。')
         st.button('写真なしで実測重量を記録する', key='home_manual_weight', width='stretch', on_click=start_manual_weight)
-    with st.expander('サンプルで操作を確認する'):
-        st.caption('CGの操作確認です。実物の推定精度を示しません。')
-        st.button('サンプルで試す', key='home_demo', on_click=start_capture, args=('サンプル画像（今すぐ試す）',))
+    if st.session_state.get('_app_admin'):
+        with st.expander('サンプルで操作を確認する'):
+            st.caption('CGの操作確認です。実物の推定精度を示しません。')
+            st.button('サンプルで試す', key='home_demo', on_click=start_capture, args=('サンプル画像（今すぐ試す）',))
     st.subheader('最近食べたパスタ')
     try:
-        rows = entries()
+        rows = [row for row in entries() if st.session_state.get('_app_admin') or row.get('source_kind') != 'synthetic']
     except (OSError, sqlite3.Error, ValueError):
         st.error('記録を読み込めませんでした。少し待ってから、記録画面で再試行してください。')
         return

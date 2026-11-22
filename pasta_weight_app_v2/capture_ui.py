@@ -10,7 +10,6 @@ import streamlit as st
 
 from pasta_vision import detect_bundle_ends, detect_spread, image_to_rgb
 from storage import get_product, list_products
-from training_manager import get_active_model
 from measurement_ui import render_weight_result, render_regression_measurement
 from settings_ui import open_calibration, select_measurement_product
 from pasta_vision import image_quality_warnings
@@ -24,6 +23,11 @@ from ui_shell import start_capture, start_manual_weight
 def _remember_mode():
     st.session_state['capture_last_mode']=st.session_state['capture_mode']
 
+def _clear_previous_capture():
+    for key in ('capture_photo', 'editing_photo', 'a4_area_result'):
+        st.session_state.pop(key, None)
+
+
 def render_capture():
     if st.session_state.get('result_request'):
         render_results(st.session_state['result_request'])
@@ -32,13 +36,19 @@ def render_capture():
     generation=st.session_state.get('capture_generation',0)
     st.button('ホームに戻る', icon=':material/arrow_back:', on_click=lambda: st.session_state.pop('capture_source',None))
     st.subheader('パスタを撮影' if source_kind=='スマホで撮影' else '写真からはじめる')
-    st.caption('写真を確認 → 重さを確認 → 保存。推定精度は検証中です。はかりの数値でも記録できます。')
+    st.caption('乾麺をできるだけ平らに広げ、重なりを少なくしてください。乾麺全体が写るように、なるべく真上から撮影してください。')
+    st.caption('無地で反射の少ない背景を使い、端まで写します。家庭内のHTTP接続では標準カメラで撮って写真を選べます。')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
-    if 'capture_mode' not in st.session_state:
-        st.session_state['capture_mode']=st.session_state.get('capture_last_mode','広げた状態')
-    mode=st.selectbox('乾麺の置き方', ['広げた状態','束の断面','束の側面・上面（回帰用）'],key='capture_mode',
+    modes = ['広げた状態', '束の断面']
+    if st.session_state.get('_app_admin'):
+        modes.append('束の側面・上面（回帰用）')
+    if st.session_state.get('capture_mode') not in modes:
+        st.session_state['capture_mode'] = st.session_state.get('capture_last_mode', '広げた状態')
+        if st.session_state['capture_mode'] not in modes:
+            st.session_state['capture_mode'] = '広げた状態'
+    mode=st.selectbox('乾麺の置き方', modes, key='capture_mode',
         format_func=lambda x: {'広げた状態':'広げている','束の断面':'束の先端を写している','束の側面・上面（回帰用）':'束を横・上から写している（現在は未対応）'}[x],
-        help='写真に合った置き方を選んでください。束の側面・上面は通常の測定では未対応です。',on_change=_remember_mode)
+        help='写真に合った置き方を選んでください。',on_change=_remember_mode)
     photo = None
     using_demo = source_kind.startswith('サンプル')
     if using_demo and mode == '束の側面・上面（回帰用）':
@@ -50,9 +60,9 @@ def render_capture():
         st.caption('表示されるのは**CGのテスト画像**です。実際の乾麺写真ではありません。')
     elif source_kind == '写真をアップロード':
         photo = st.file_uploader('JPEG / PNG形式の乾麺写真', type=['jpg', 'jpeg', 'png'],
-                                 key=f'upload_pasta_{generation}')
+                                 key=f'upload_pasta_{generation}', on_change=_clear_previous_capture)
     else:
-        photo = st.camera_input('乾麺を撮影', key=f'camera_pasta_{generation}')
+        photo = st.camera_input('乾麺を撮影', key=f'camera_pasta_{generation}', on_change=_clear_previous_capture)
         st.caption('スマートフォンのブラウザでカメラを使用するには、HTTPSなどの安全な接続が必要です。'
                    'カメラが開けない場合は標準カメラで撮影後、アップロードしてください。')
 
@@ -87,7 +97,8 @@ def render_capture():
         st.error('製品情報を開けませんでした。写真は保持しています。少し待って、もう一度お試しください。')
         if st.button('製品情報を読み直す',key='products_retry'):st.rerun()
         return
-    product_ids = {p['id']: p for p in products}
+    product_ids = {p['id']: p for p in products
+                   if st.session_state.get('_app_admin') or not p['name'].startswith('デモ用')}
     if not product_ids:
         st.info('使用する製品を登録してください。写真は保持しています。')
         st.button('製品を登録する', key='capture_add_product', on_click=open_calibration)
@@ -96,6 +107,16 @@ def render_capture():
     if product is None:
         st.info('使った製品を選ぶと、この写真を解析できます。')
         return
+    if not using_demo and mode == '広げた状態' and hasattr(photo, 'getvalue'):
+        from area_ui import render_area_candidate
+        if render_area_candidate(preview, product, photo.getvalue()):
+            return
+    if not using_demo and not st.session_state.get('_app_admin'):
+        with st.expander('はかりで測った重さを記録する'):
+            from manual_weight_ui import render_manual_weight
+            if st.checkbox('実測入力を開く', key='capture_direct_manual'):
+                render_manual_weight(product, preview)
+                return
     if product['name'].startswith('デモ用'):
         st.warning('現在の製品データは**仮の数値**です。実際の重量・カロリーではありません。'
                    '設定の「製品・校正」で自分の製品を登録してください。')
@@ -104,13 +125,14 @@ def render_capture():
     if not using_demo and (product['name'].startswith('デモ用') or strand_calibration(product) is None):
         st.button('製品を登録・校正する', key='capture_calibration', on_click=open_calibration, args=(product,))
 
-    from developer_ui import DEFAULT_SPREAD, DEFAULT_BUNDLE
-    developer = st.session_state.get('dev_tools_enabled', False)
+    from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
+    developer = st.session_state.get('_app_admin') and st.session_state.get('dev_tools_enabled', False)
     method = st.session_state.get('research_method', 'OpenCV本数検出') if developer else 'OpenCV本数検出'
     using_regression = method.startswith('学習')
     active_model = None
     model_error = None
     if using_regression:
+        from training_manager import get_active_model
         try:
             active_model = get_active_model()
         except (OSError, ValueError, sqlite3.Error):
@@ -155,6 +177,8 @@ def _diagnostic_product(product):
 
 
 def _unfinished_count_diagnostic(product, reason):
+    if not st.session_state.get('_app_admin'):
+        return
     with st.expander('写真と重量の診断'):
         st.caption('写真：読み込み済み')
         _diagnostic_product(product)
@@ -165,6 +189,8 @@ def _unfinished_count_diagnostic(product, reason):
 def _count_diagnostic(result, product, mode, using_demo):
     """Use one decision for the displayed diagnosis, weight and save action."""
     manual_count = None
+    if not st.session_state.get('_app_admin'):
+        return decide_count_weight(product, result, mode=mode, using_demo=using_demo), False
     with st.expander('写真と重量の診断'):
         st.caption('写真：読み込み済み · OpenCVの本数検出を実行')
         _diagnostic_product(product)
@@ -280,10 +306,11 @@ def render_results(request):
         st.error('写真の重量を計算できませんでした。写真・設定を見直すか、実測重量を入力してください。')
         recovery(product, rgb, synthetic=using_demo)
         return
-    st.session_state['dev_last_detection'] = dict(
-        overlay=result.overlay_rgb, mask=result.mask, count=result.count, parameters=request['parameters'],
-        product_name=product['name'], calibration=decision.calibration_g_per_strand,
-        reasons=decision.reasons, weight_g=decision.weight_g, manual=manual, using_demo=using_demo)
+    if st.session_state.get('_app_admin'):
+        st.session_state['dev_last_detection'] = dict(
+            overlay=result.overlay_rgb, mask=result.mask, count=result.count, parameters=request['parameters'],
+            product_name=product['name'], calibration=decision.calibration_g_per_strand,
+            reasons=decision.reasons, weight_g=decision.weight_g, manual=manual, using_demo=using_demo)
     if decision.weight_g is None:
         _log_estimate_outcome(request, '検出結果・校正条件を確認して重量推定を見送り')
         st.warning('重量を計算できません。' + ' '.join(decision.reasons))

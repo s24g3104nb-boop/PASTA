@@ -7,7 +7,7 @@ import re
 ALLOWED_CSV={'dataset/dataset_template.csv','dataset/ml_template.csv'}
 ALLOWED_IMAGES={'pasta_weight_app_v2/sample_images/demo_bundle_16.png',
                 'pasta_weight_app_v2/sample_images/demo_spread_12.png'}
-DENIED_SUFFIX={'.jpg','.jpeg','.heic','.heif','.webp','.mpo','.png','.zip','.sqlite3','.sqlite','.db','.backup','.pt','.pth','.onnx','.joblib','.pkl','.pem','.key'}
+DENIED_SUFFIX={'.jpg','.jpeg','.heic','.heif','.webp','.mpo','.png','.zip','.sqlite3','.sqlite','.db','.backup','.pt','.pth','.safetensors','.onnx','.joblib','.pkl','.pem','.key'}
 SECRET_PATTERNS = [
     rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
     rb'\bgh[pousr]_[A-Za-z0-9]{30,}\b',
@@ -23,8 +23,8 @@ def has_secret(content):
 
 def unsafe(path):
     p=PurePosixPath(path)
-    if any(part.lower() in {'data','user_data','pasta_lens_private_dataset','pasta_lens_42_photos','user_photos','meal_photos','backups','models','logs'} for part in p.parts):return True
-    if '.sqlite3-' in p.name:return True
+    if any(part.lower() in {'data','user_data','pasta_lens_private_dataset','pasta_lens_42_photos','user_photos','meal_photos','backups','models','logs','foundation-private','admin_data'} for part in p.parts):return True
+    if '.sqlite3-' in p.name or p.name.endswith('.annotation.json'):return True
     if p.name.lower().endswith('.log') or '.log.' in p.name.lower():return True
     if p.name.startswith('.env') or p.name in {'secrets.toml','id_rsa','id_ed25519'}:return True
     if p.suffix.lower()=='.csv':return path not in ALLOWED_CSV

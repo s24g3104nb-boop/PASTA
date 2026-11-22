@@ -27,6 +27,7 @@ def start_capture(source):
     st.session_state.pop('analysis_ready',None)
     st.session_state.pop('result_request',None)
     st.session_state.pop('editing_photo',None)
+    st.session_state.pop('a4_area_result', None)
     st.session_state.pop('capture_photo',None)
     st.session_state.pop('measurement_submission_token',None)
     st.session_state['capture_generation']=st.session_state.get('capture_generation',0)+1

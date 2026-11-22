@@ -18,7 +18,7 @@ init_db()
 save_measurement(product_name='検索試験パスタ', mode='spread', detected_count=20,
     estimated_g=20, actual_g=20,
     nutrition=dict(kcal=70,protein_g=2,fat_g=.4,carb_g=14),
-    image_rgb=np.full((32,32,3), 150, dtype=np.uint8), source_kind='synthetic')
+    image_rgb=np.full((32,32,3), 150, dtype=np.uint8), source_kind='real')
 at = AppTest.from_file('pasta_weight_app_v2/app.py').run(timeout=20)
 assert not at.exception, [item.message for item in at.exception]
 at.radio(key='main_nav').set_value('記録').run(timeout=20)

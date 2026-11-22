@@ -56,7 +56,7 @@ def _route_diary():
     st.session_state.record_kind = '食事日記'
 
 
-def start_diary(measurement_id=None, cooking_session_id=None, day=None):
+def start_diary(measurement_id=None, cooking_session_id=None, day=None, confirmed_dish=None):
     """Navigation callback: resume an unsaved draft, or start a contextual meal."""
     drafts = _drafts()
     active = drafts.get(st.session_state.get('diary_active_draft'))
@@ -76,6 +76,12 @@ def start_diary(measurement_id=None, cooking_session_id=None, day=None):
         _activate(active)
     else:
         _activate(_new_draft())
+    if confirmed_dish:
+        from dish_classifier import DISH_NAMES
+        draft = _drafts()[st.session_state.diary_active_draft]
+        if not draft['dish_name'] or draft['dish_name'] in DISH_NAMES:
+            draft['dish_name'] = confirmed_dish
+            st.session_state.pop('meal_dish_name_'+draft['id'], None)
     _route_diary()
 
 
@@ -109,7 +115,10 @@ def _show_list():
 
 
 def _remember_field(draft_id, field, widget_key):
-    _drafts()[draft_id][field] = st.session_state[widget_key]
+    draft = _drafts()[draft_id]
+    draft[field] = st.session_state[widget_key]
+    if field == 'dish_name' and draft['dish_name'] != getattr(draft.get('photo_suggestion'), 'name', None):
+        draft['photo_name_confirmed'] = False
 
 
 def _field(widget, label, draft, field, **kwargs):
@@ -122,15 +131,21 @@ def _field(widget, label, draft, field, **kwargs):
 
 def _upload_changed(draft_id, key):
     uploaded = st.session_state.get(key)
+    draft = _drafts()[draft_id]
+    draft.pop('photo_suggestion', None)
+    draft['photo_name_confirmed'] = False
     if uploaded is not None:
-        draft = _drafts()[draft_id]
         draft['photo_bytes'] = uploaded.getvalue()
         draft['photo_name'] = uploaded.name
         draft['remove_photo'] = False
+    else:
+        draft['photo_bytes'] = draft['photo_name'] = None
 
 
 def _clear_photo(draft_id):
     draft = _drafts()[draft_id]
+    draft.pop('photo_suggestion', None)
+    draft['photo_name_confirmed'] = False
     draft['photo_bytes'] = None
     draft['photo_name'] = None
     draft['remove_photo'] = True
@@ -197,14 +212,19 @@ def _go_cooking(draft):
     _activate(draft)
     st.session_state.cooking_return_diary = True
     st.session_state.cooking_source_measurement_id = draft.get('measurement_id')
-    st.session_state.main_nav = '設定'
-    st.session_state.settings_section = '料理の栄養計算'
+    from dish_classifier import DISH_NAMES
+    st.session_state['cooking_incoming_dish'] = draft['dish_name'] if draft['dish_name'] in DISH_NAMES else None
+    st.session_state['cooking_classified_dish'] = draft['dish_name'] if draft.get('photo_name_confirmed') else None
+    st.session_state.main_nav = '記録'
+    st.session_state.record_kind = '食事日記'
+    st.session_state.diary_screen = 'cooking'
 
 
 def _link_options(draft, db_path):
     """Reuse saved source records, leaving all calculation and source rows unchanged."""
-    measurements = list_measurements(db_path)
-    sessions = list_cooking_sessions(db_path)
+    admin = st.session_state.get('_app_admin')
+    measurements = [r for r in list_measurements(db_path) if admin or r['source_kind'] != 'synthetic']
+    sessions = [r for r in list_cooking_sessions(db_path) if admin or r['dry_snapshot'].get('source_kind') != 'synthetic']
     measurement_map = {r['id']: r for r in measurements}
     session_map = {r['id']: r for r in sessions}
     with st.expander('乾麺・栄養の記録を関連付ける（任意）', expanded=bool(draft.get('measurement_id') or draft.get('cooking_session_id'))):
@@ -233,6 +253,7 @@ def _link_options(draft, db_path):
             if draft['measurement_id'] is not None and cooking['measurement_id'] != draft['measurement_id']:
                 st.warning('乾麺の記録と料理の計算が一致していません。どちらかを選び直してください。')
             calculation = cooking['calculation']
+            st.caption(f"料理全体の乾麺分 {calculation['dry']['kcal']:.1f} kcal + ソース・具材 {calculation['additional']['kcal']:.1f} kcal")
             _nutrition({'nutrition_status': calculation.get('nutrition_basis', 'confirmed_amounts'),
                         'nutrition_snapshot': calculation['portion'],
                         'nutrition_source': '保存済み料理の、食べた分として計算した値'}, detailed=True)
@@ -279,6 +300,8 @@ def _render_editor(db_path):
         try:
             rgb = image_to_rgb(BytesIO(draft['photo_bytes']))
             st.image(rgb, width='stretch')
+            from dish_vision_ui import render_dish_suggestion
+            render_dish_suggestion(rgb, draft)
             st.caption('選択中：' + (draft['photo_name'] or '料理写真'))
         except (ValueError, OSError):
             valid_photo = False
@@ -300,7 +323,7 @@ def _render_editor(db_path):
         _link_options(draft, db_path)
     except (sqlite3.Error, OSError, ValueError):
         st.warning('関連する記録を読み込めません。接続先の保存領域を確認して、もう一度お試しください。')
-    st.caption('写真AIによるカロリー推定は準備中です。写真だけでは材料や分量を判断できません。')
+    st.caption('ソースや具材を含めて計算するときは、使った材料と分量を確認してください。')
     if st.button('食事記録を保存', key='meal_save', type='primary', width='stretch', disabled=not valid_photo):
         try:
             with st.spinner('食事記録を保存しています…'):
@@ -470,7 +493,7 @@ def _render_list(rows, db_path):
 def render_diary(db_path=DEFAULT_DB):
     st.title('パスタ日記')
     try:
-        rows = entries(db_path)
+        rows = [row for row in entries(db_path) if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic']
     except (sqlite3.Error, OSError, ValueError):
         st.error('記録を読み込めませんでした。保存先を確認して、もう一度お試しください。入力途中の内容は保持しています。')
         if st.button('もう一度読み込む', key='diary_retry'):

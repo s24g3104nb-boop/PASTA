@@ -59,10 +59,13 @@ def render_products():
         if st.button('製品情報を読み直す', key='editor_products_retry'):
             st.rerun()
         return
-    mapping = {p['id']: p for p in products_for_edit}
+    mapping = {p['id']: p for p in products_for_edit
+               if st.session_state.get('_app_admin') or not p['name'].startswith('デモ用')}
     next_editor = st.session_state.pop('next_product_editor_id', None)
     if next_editor is not None:
         st.session_state['product_edit_mode'] = next_editor if next_editor in mapping else 0
+    if st.session_state.get('product_edit_mode') not in {0, *mapping}:
+        st.session_state['product_edit_mode'] = 0
     selected = st.selectbox('編集する製品', options=[0] + list(mapping),
                             format_func=lambda p: '＋ 新しい製品を登録' if p == 0
                             else mapping[p]['name'], key='product_edit_mode')
@@ -126,27 +129,10 @@ def render_products():
 
 def render_guide():
     from capture_guide_ui import render_sheet_guide
-    with st.expander('A4撮影補助シートの使い方（研究用）'):
+    with st.expander('A4撮影補助シートの使い方'):
         render_sheet_guide()
+    st.markdown('''乾麺は重ねずに広げ、全体が入るよう真上から撮影します。
 
-    st.subheader('準備するもの')
-    st.markdown('''
-    - パソコン（Pythonを動かす）とスマートフォン
-    - 乾燥スパゲッティ（最初は同じ銘柄、同じ長さを使用）
-    - 電子はかり（実測重量の校正に使用）
+アプリでカメラが使えないときは、スマートフォンの標準カメラで撮影して写真を選びます。
 
-    **広げた状態：** 暗く無地の台の上に、麺が交差しないように広げて真上から撮影。
-
-    **束の断面：** 束の先端を真正面から撮影。円が重なったり、端面が隠れたりすると誤差が増えます。
-
-    **基準物：** 定規や硬貨は不要。ただし、製品ごとの1本当たりの重量は事前の実測が必要です。
-
-    **食事の記録：** ホームの「食べたパスタを記録する」から、料理名と食べた日を保存できます。
-    写真と時刻は任意です。記録画面のカレンダーや一覧で振り返れます。
-
-    **栄養計算：** 乾麺の結果は乾麺分のみです。料理全体は、使った食材と分量を入力して計算します。
-    完成料理の写真AIによるカロリー推定は準備中です。計算しなくても食事日記を保存できます。
-
-    **データの取扱い：** 保存した写真・履歴は、このPythonアプリを動かしているPCの
-    `data/`フォルダに置かれます。認証機能がないため、インターネットに一般公開しないでください。
-    ''')
+推定できないときは、電子はかりで測った重さを保存できます。完成した料理を撮った後、乾麺の記録と使った材料を選ぶと、食べた分の栄養を計算できます。''')

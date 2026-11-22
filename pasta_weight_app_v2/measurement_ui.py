@@ -6,7 +6,6 @@ from uuid import uuid4
 import streamlit as st
 from pasta_vision import nutrition_for_weight
 from storage import DEFAULT_DB, save_measurement
-from pasta_ml.model import predict
 from measurement_diagnostics import trace
 from nutrition_state import has_nutrition, snapshot_for_nutrition
 
@@ -27,7 +26,7 @@ def _submission_token(rgb, product, mode, weight, detected_count, estimator):
 def _remember_actual(token):
     st.session_state.setdefault('measurement_actual_drafts', {})[token] = {
         'known': st.session_state.get('actual_known', False),
-        'weight': st.session_state.get('actual_weight', 50.0),
+        'weight': st.session_state.get('actual_weight'),
     }
 
 
@@ -55,7 +54,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     st.caption(f'使用製品：{product["name"]}')
     if nutrit is not None:
         st.caption('推定重量から計算した乾麺分の栄養値です。ソース・具材は含みません。')
-    if st.session_state.get('dev_tools_enabled'):
+    if st.session_state.get('_app_admin') and st.session_state.get('dev_tools_enabled'):
         with st.expander('推定方式と計算の詳細'):
             st.caption(f'使用方式: {estimator}')
             st.caption(explanation)
@@ -67,13 +66,13 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     actual = None
     if has_actual:
         actual = st.number_input('実測重量（g）', min_value=0.1,
-                                 value=float(draft.get('weight', 50.0)), step=0.1,
+                                 value=draft.get('weight'), step=0.1,
                                  key='actual_weight', disabled=bool(receipt),
                                  on_change=_remember_actual, args=(token,))
-        st.write(f'絶対誤差：**{abs(weight - actual):.1f} g**'
-                 f' ／ 誤差率：**{abs(weight - actual) / actual * 100:.1f}%**')
+        if actual is not None:
+            st.write(f'実測 {actual:.1f} g · 写真の推定との差 {abs(weight - actual):.1f} g')
     if st.button('履歴に保存', type='primary', width='stretch',
-                 key='measurement_save', disabled=bool(receipt)):
+                 key='measurement_save', disabled=bool(receipt) or (has_actual and actual is None)):
         try:
             saved_id = save_measurement(product_name=product['name'], mode=mode,
                              detected_count=detected_count, estimated_g=weight,
@@ -100,12 +99,14 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
         st.caption('製品・推定重量・実測重量を引き継いで、完成料理の写真を記録できます。')
     if 'capture_source' in st.session_state:
         from ui_shell import start_capture
-        st.button('もう一度撮影', on_click=start_capture, args=('スマホで撮影',), key='result_retake', width='stretch')
+        st.button('もう一度撮影', on_click=start_capture, args=('スマホで撮影' if using_demo else st.session_state.get('capture_resume_source', '写真をアップロード'),),
+                  key='result_retake', width='stretch')
     st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
                '電子はかりで確認してください。')
 
 
 def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_path=DEFAULT_DB, show_image=True):
+    from pasta_ml.model import predict
     if using_demo or active['artifact']['source'] != 'real':
         st.warning('実写モデルの測定には実物の写真を使用してください。CGは精度評価に使えません。')
         return

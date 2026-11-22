@@ -21,7 +21,7 @@ import os
 sys.path.insert(0, os.environ['PASTA_APP_DIR'])
 from streamlit.testing.v1 import AppTest
 
-at = AppTest.from_file(str(Path(os.environ['PASTA_APP_DIR']) / 'app.py'), default_timeout=15).run()
+at=AppTest.from_string("import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd()/'pasta_weight_app_v2')); from app_runtime import render_application; render_application(admin=True)", default_timeout=20).run()
 assert not at.exception, at.exception
 at.session_state['dev_tools_enabled']=True
 at.button(key='home_demo').click().run()

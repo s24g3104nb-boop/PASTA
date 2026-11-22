@@ -63,9 +63,11 @@ def recovery(product,rgb,*,synthetic=False):
 
 def render_without_photo():
     st.button('ホームに戻る',on_click=lambda:st.session_state.pop('manual_only',None))
-    products={p['id']:p for p in list_products()}
+    products = {p['id']: p for p in list_products()
+                if st.session_state.get('_app_admin') or not p['name'].startswith('デモ用')}
     product = select_measurement_product(products, '使用した製品', 'manual_only_product')
     if product is not None:
         render_manual_weight(product)
     else:
         st.info('はかりで測った乾麺の製品を選んでください。')
+        st.button('製品を登録する', on_click=open_calibration, key='manual_register_product')

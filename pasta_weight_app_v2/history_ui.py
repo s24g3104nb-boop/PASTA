@@ -29,16 +29,19 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
         if compact:return
         with st.expander('詳細・重量の修正'):
             if path.is_file():st.image(str(path),caption='保存した写真',width='stretch')
-            st.write(f"撮影状態：{row['mode']} / 使用方式：{row['estimator']}")
-            if not row['estimator'].startswith('ridge:') and row['estimator']!='manual_weight':
-                st.write(f"計算に使用した本数：{row['detected_count']} 本")
+            if st.session_state.get('_app_admin'):
+                st.write(f"撮影状態：{row['mode']} / 使用方式：{row['estimator']}")
+            if row['estimator'] == 'a4_area_calibrated':
+                st.caption('A4を用いた面積換算（検証中）')
             st.caption('元の推定重量・推定栄養値を保持し、はかりの実測値を追記します。料理計算では実測値を優先します。')
             if row['actual_g'] is not None and row['estimated_g'] is not None:
                 st.write(f"絶対誤差：{abs(row['estimated_g']-row['actual_g']):.1f} g")
             with st.form(f"edit_history_{row['id']}"):
-                actual=st.number_input('はかりで測った重量（g）',min_value=.1,value=float(row['actual_g'] or max(.1,row['estimated_g'] or .1)),key=f"actual_{row['id']}")
+                actual=st.number_input('はかりで測った重量（g）',min_value=.1,value=float(row['actual_g']) if row['actual_g'] is not None else None,key=f"actual_{row['id']}")
                 if st.form_submit_button('実測重量を保存'):
                     try:
+                        if actual is None:
+                            raise ValueError('はかりで測った重量を入力してください。')
                         change_measurement(row['id'],actual_g=actual,db_path=db_path)
                         st.session_state['history_feedback']='実測重量を保存しました。'
                         st.rerun()
@@ -61,7 +64,7 @@ def render_history(db_path=DEFAULT_DB):
     st.caption('ひと皿ずつ、振り返ろう。')
     if st.session_state.get('history_feedback'):st.success(st.session_state.pop('history_feedback'))
     try:
-        rows=list_measurements(db_path)
+        rows=[row for row in list_measurements(db_path) if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic']
     except (OSError, sqlite3.Error):
         st.error('履歴を読み込めませんでした。保存先を確認し、開き直してください。')
         return
@@ -78,6 +81,8 @@ def render_history(db_path=DEFAULT_DB):
         st.session_state['history_page']=last_page
     page=st.number_input('ページ',min_value=1,max_value=last_page,value=1,key='history_page')
     for row in matches[(page-1)*10:page*10]:measurement_card(row,db_path)
+    if not st.session_state.get('_app_admin'):
+        return
     with st.expander('誤差の集計・一覧データ'):
         frame=pd.DataFrame(matches)
         shown=frame.copy()

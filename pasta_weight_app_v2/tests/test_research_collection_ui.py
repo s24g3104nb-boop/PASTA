@@ -9,7 +9,7 @@ from io import BytesIO
 import sys
 sys.path.insert(0,'pasta_weight_app_v2')
 from research_collection import CollectionStore
-at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=20).run()
+at=AppTest.from_string("import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd()/'pasta_weight_app_v2')); from app_runtime import render_application; render_application(admin=True)", default_timeout=20).run()
 at.radio(key='main_nav').set_value('設定').run()
 at.selectbox(key='settings_section').set_value('開発・検証ツール').run()
 at.selectbox(key='developer_section').set_value('独立試料・撮影データ登録').run()

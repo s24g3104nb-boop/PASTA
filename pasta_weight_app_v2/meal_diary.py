@@ -71,6 +71,8 @@ def _sources(c,measurement_id,cooking_session_id):
         status=calculation.get('nutrition_basis','confirmed_amounts')
         nutrition=dict(calculation['portion'],calculation=calculation)
         source='保存済み料理 #'+str(cooking_session_id)+' の取り分け量に基づく計算'
+        if row['classifier_status'] == 'user_confirmed_vision':
+            source += ' · 料理名は写真の候補から利用者が確認'
     if measurement_id is not None:
         row=c.execute('SELECT * FROM measurements WHERE id=?',(measurement_id,)).fetchone()
         if row is None:raise ValueError('関連する乾麺の記録が見つかりません。')
@@ -102,7 +104,13 @@ def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',me
             if edit and (old is None or old['deleted']):raise ValueError('編集する記録が見つかりません。')
             if edit and expected_updated_at and expected_updated_at!=old['updated_at']:raise ValueError('別の画面で更新されています。一覧から記録を開き直してください。')
             mid,snapshot,status,source,nutrition=_sources(c,measurement_id,cooking_session_id)
-            if old and old['measurement_id']==mid and old['cooking_session_id']==cooking_session_id:
+            same_link = old and old['measurement_id'] == mid and old['cooking_session_id'] == cooking_session_id
+            if mid is not None and not same_link:
+                used = c.execute('SELECT 1 FROM meal_entries WHERE measurement_id=? AND deleted=0 AND id<>?',
+                                 (mid, ident)).fetchone()
+                if used:
+                    raise ValueError('この乾麺の記録は別の食事に使用済みです。記録を見直すか、別の乾麺を選んでください。')
+            if same_link:
                 snapshot=json.loads(old['measurement_snapshot_json'] or 'null');status=old['nutrition_status']
                 source=old['nutrition_source'];nutrition=json.loads(old['nutrition_snapshot_json'] or 'null')
             if photo is not None:filename=persist_photo(prepare_photo(photo),db)

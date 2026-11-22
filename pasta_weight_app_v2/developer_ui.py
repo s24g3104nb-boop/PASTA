@@ -3,8 +3,7 @@ import streamlit as st
 from ui_shell import start_capture
 from training_ui import render_training_tab
 
-DEFAULT_SPREAD = dict(saturation_min=20, value_min=75, min_area=160, min_elongation=3.0)
-DEFAULT_BUNDLE = dict(min_radius=8, max_radius=27, min_distance=32, hough_sensitivity=18)
+from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 
 
 def _remember(widget, durable):
@@ -12,7 +11,7 @@ def _remember(widget, durable):
 
 
 def render_developer_tools():
-    st.caption('研究・検証用の設定です。画面を分けることはアクセス制御ではありません。')
+    st.caption('管理用の別データ領域で実行しています。')
     enabled = st.checkbox('測定で開発用設定を使う', value=st.session_state.get('dev_tools_enabled', False),
                           key='dev_tools_toggle', on_change=_remember,
                           args=('dev_tools_toggle', 'dev_tools_enabled'))

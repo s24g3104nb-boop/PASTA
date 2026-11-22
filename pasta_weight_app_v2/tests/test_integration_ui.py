@@ -22,7 +22,7 @@ sys.path.insert(0,'pasta_weight_app_v2')
 from streamlit.testing.v1 import AppTest
 import capture_ui
 from storage import save_product
-at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=20).run()
+at=AppTest.from_string("import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd()/'pasta_weight_app_v2')); from app_runtime import render_application; render_application(admin=True)", default_timeout=20).run()
 save_product('合成テスト用の製品',0,350,12,2,70)
 at.button(key='home_demo').click().run()
 at.selectbox(key='which_product').set_value(2).run()
@@ -67,7 +67,7 @@ assert at.button(key='decode_retake')
 assert not at.metric
 at.button(key='decode_manual').click().run()
 assert not at.exception,at.exception
-assert at.button(key='manual_weight_save')
+assert at.button(key='manual_register_product')
 assert not any(m.label=='推定重量' for m in at.metric)
 ''', tmp_path)
 
@@ -79,7 +79,7 @@ sys.path.insert(0,'pasta_weight_app_v2')
 from streamlit.testing.v1 import AppTest
 import home_ui
 at=AppTest.from_file('pasta_weight_app_v2/app.py').run()
-home_ui.entries=lambda: [dict(id='synthetic-test',photo='../invalid.png',dish_name='写真を開けない記録',eaten_date='2026-11-11',eaten_time=None)]
+home_ui.entries=lambda: [dict(id='synthetic-test',photo='../invalid.png',source_kind='real',dish_name='写真を開けない記録',eaten_date='2026-11-11',eaten_time=None)]
 at.run()
 assert not at.exception,at.exception
 assert at.button(key='home_camera')

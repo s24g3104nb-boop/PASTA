@@ -11,6 +11,7 @@ import sqlite3
 
 from cooking import Ingredient, calculate_meal, dry_snapshot, nonnegative
 from dish_classifier import DISH_NAMES
+from standard_recipes import standard_recipe
 from storage import DEFAULT_DB
 from operation_logs import RECORDS, logged_operation
 
@@ -74,11 +75,13 @@ def save_cooking_session(*, measurement_id: int, selected_dish: str,
                         confirmed_same_batch: bool, ingredients: list[Ingredient],
                         servings: int | None = None, consumed_fraction: float | None = None,
                         recipe_template_id: int | None = None,
-                        db_path=DEFAULT_DB) -> int:
+                        classifier_status='untrained/manual', db_path=DEFAULT_DB) -> int:
     if confirmed_same_batch is not True:
         raise ValueError('同一調理バッチの乾麺であることを確認してください。')
     if isinstance(measurement_id, bool) or not isinstance(measurement_id, int):
         raise ValueError('計測履歴IDを指定してください。')
+    if classifier_status not in ('untrained/manual', 'user_confirmed_vision'):
+        raise ValueError('料理名の確認方法が不正です。')
     if selected_dish not in DISH_NAMES:
         raise ValueError('料理名を一覧から選択してください。')
     init_cooking_db(db_path)
@@ -97,11 +100,14 @@ def save_cooking_session(*, measurement_id: int, selected_dish: str,
         if recipe_template_id is not None:
             if isinstance(recipe_template_id, bool) or not isinstance(recipe_template_id, int):
                 raise ValueError('レシピテンプレートIDが不正です。')
-            found = con.execute('SELECT * FROM recipe_templates WHERE id=?',
-                                (recipe_template_id,)).fetchone()
-            if found is None:
+            if recipe_template_id < 0:
+                template = standard_recipe(recipe_template_id)
+            else:
+                found = con.execute('SELECT * FROM recipe_templates WHERE id=?',
+                                    (recipe_template_id,)).fetchone()
+                template = _decode_template(found) if found else None
+            if template is None:
                 raise ValueError('選択したレシピテンプレートは存在しません。')
-            template = _decode_template(found)
             if template['selected_dish'] != selected_dish:
                 raise ValueError('テンプレートと料理名が一致しません。料理名に合うテンプレートを選択してください。')
         calculation = calculate_meal(snapshot, ingredients, servings=servings,
@@ -116,7 +122,7 @@ def save_cooking_session(*, measurement_id: int, selected_dish: str,
              classifier_status, dry_snapshot_json, calculation_json)
             VALUES (?, ?, ?, 1, ?, ?, ?)''',
             (measurement_id, datetime.now(timezone.utc).isoformat(), selected_dish,
-             'untrained/manual', json.dumps(snapshot, ensure_ascii=False, allow_nan=False),
+             classifier_status, json.dumps(snapshot, ensure_ascii=False, allow_nan=False),
              json.dumps(calculation, ensure_ascii=False, allow_nan=False)))
         session_id = cursor.lastrowid
         con.executemany('''INSERT INTO cooking_ingredients
