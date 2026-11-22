@@ -10,6 +10,8 @@ const python=process.env.PASTA_PYTHON||path.join(root,'.venv/bin/python');
 const db=path.join(work,'data/measurements.sqlite3');
 const port=process.env.PASTA_UI_PORT||'8523';
 const adminPassword=randomBytes(18).toString('hex');
+execFileSync(python,['-c','from storage import init_db, save_product\ninit_db()\nsave_product("未校正の合成テスト用製品", 0, 350, 12, 2, 70)'],
+  {cwd:path.join(root,'pasta_weight_app_v2'),env:{...process.env,PASTA_DATA_DIR:path.join(work,'data')}});
 const proc=spawn(python,['-m','streamlit','run','pasta_weight_app_v2/admin_app.py','--server.address','127.0.0.1','--server.port',port,'--server.headless','true','--browser.gatherUsageStats','false'],{cwd:root,env:{...process.env,PASTA_DATA_DIR:path.join(work,'unused-public'),PASTA_RESEARCH_DATA_DIR:path.join(work,'unused-research'),
 PASTA_ADMIN_DATA_DIR:path.join(work,'data'),PASTA_ADMIN_PASSWORD:adminPassword},stdio:['ignore',fs.openSync(path.join(work,'server.log'),'a'),fs.openSync(path.join(work,'server.log'),'a')]});
 let browser;const results=[];
