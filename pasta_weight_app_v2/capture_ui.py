@@ -36,8 +36,8 @@ def render_capture():
     generation=st.session_state.get('capture_generation',0)
     st.button('ホームに戻る', icon=':material/arrow_back:', on_click=lambda: st.session_state.pop('capture_source',None))
     st.subheader('パスタを撮影' if source_kind=='スマホで撮影' else '写真からはじめる')
-    st.caption('乾麺をできるだけ平らに広げ、重なりを少なくしてください。乾麺全体が写るように、なるべく真上から撮影してください。')
-    st.caption('無地で反射の少ない背景を使い、端まで写します。家庭内のHTTP接続では標準カメラで撮って写真を選べます。')
+    st.caption('乾麺をできるだけ平らに広げ、重なりを減らして真上から撮影してください。')
+    st.caption('無地で反射の少ない背景を使い、麺の両端が写るように余白を残してください。')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
     modes = ['広げた状態', '束の断面']
     if st.session_state.get('_app_admin'):
@@ -107,7 +107,7 @@ def render_capture():
     if product is None:
         st.info('使った製品を選ぶと、この写真を解析できます。')
         return
-    if not using_demo and mode == '広げた状態' and hasattr(photo, 'getvalue'):
+    if st.session_state.get('_app_admin') and not using_demo and mode == '広げた状態' and hasattr(photo, 'getvalue'):
         from area_ui import render_area_candidate
         if render_area_candidate(preview, product, photo.getvalue()):
             return

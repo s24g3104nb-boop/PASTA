@@ -18,7 +18,7 @@ from operation_logs import WEIGHT, log_error, log_info
 from capture_guide_ui import render_sheet_guide
 
 from pasta_weight_app_v2.experiments.area_calibration import predict_area
-from pasta_weight_app_v2.experiments.foundation_backends import MAX_SIDE, SEED, hsv_mask, start_segmenter
+from pasta_weight_app_v2.experiments.foundation_backends import MAX_SIDE, SEED, start_segmenter
 from pasta_weight_app_v2.experiments.foundation_masks import a4_projection
 from pasta_weight_app_v2.experiments.foundation_resources import torch_runtime
 from pasta_weight_app_v2.experiments.stability_pipeline import shape_features
@@ -41,17 +41,16 @@ def _run_model(rgb, line, flat, layer):
         mask = runner(rgb)
     projection = a4_projection(rgb, mask, dict(printed_line_mm=line, flat_sheet_confirmed=flat) if line else None)
     projected_area = projection['features'][0] if projection['features'] and layer else None
-    color_mask = hsv_mask(rgb, lab=True)
-    union = np.count_nonzero(mask | color_mask)
-    agreement = np.count_nonzero(mask & color_mask) / union if union else 0.
 
     overlay = rgb.copy()
     overlay[mask] = np.rint(rgb[mask]*.55 + np.array([0, 200, 200])*.45).astype(np.uint8)
     return dict(overlay=overlay, shape=shape_features(mask, SEED), projection=projection,
-                backend=runner.metadata, area_mm2=projected_area, agreement=agreement, token=uuid4().hex, saved=None)
+                backend=runner.metadata, area_mm2=projected_area, token=uuid4().hex, saved=None)
 
 
 def render_area_candidate(preview, product, content):
+    if not st.session_state.get('_app_admin'):
+        return
     photo_id = sha256(content).hexdigest()
     with st.expander('A4シートを使って重さを推定（検証中）'):
         if not os.environ.get('PASTA_MOBILESAM_CHECKPOINT'):
@@ -80,20 +79,13 @@ def render_area_candidate(preview, product, content):
         result = st.session_state.get('a4_area_result')
         if not result or result['signature'] != signature:
             return
-        if st.session_state.get('_app_admin'):
-            st.image(result['overlay'], caption='青緑色がAIで抽出した可視領域', width='stretch')
-            st.caption(f"画像内の占有率 {result['shape']['mask_fraction']:.1%}")
+        st.image(result['overlay'], caption='青緑色がAIで抽出した可視領域', width='stretch')
+        st.caption(f"画像内の占有率 {result['shape']['mask_fraction']:.1%}")
         area = result['area_mm2']
         if area is None:
             st.warning('実寸換算に必要な条件が揃っていません。印刷線、四隅のマーカー、全体の収まり、一層の配置を確認してください。')
             return
         st.metric('A4紙面上の投影面積', f'{area/100:.1f} cm²')
-        if not st.session_state.get('_app_admin'):
-            if result['agreement'] < .65:
-                st.warning('背景や反射の影響で、麺の範囲を確認できませんでした。無地で光沢のない背景から撮り直してください。')
-            else:
-                return _render_estimate(result, preview, product, area)
-            return
         _, length, width = result['projection']['features']
         st.caption(f'幅 {width:.0f} mm × 長さ {length:.0f} mm（紙面への投影）')
         if st.checkbox('抽出範囲に背景・反射の混入や麺の欠けがないことを確認した',

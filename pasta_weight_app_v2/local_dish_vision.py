@@ -60,7 +60,9 @@ def suggest_from_scores(dishes, ingredients, color):
     return Suggestion(name, hints, color, 'OpenCLIP ViT-B/32 LAION400M')
 
 
-class LocalDishClassifier:
+class OpenClipVision:
+    """Shared local image encoder with pinned official checkpoint."""
+
     def __init__(self, checkpoint, device='cpu'):
         path = Path(checkpoint).resolve(strict=True)
         with path.open('rb') as stream:
@@ -76,15 +78,25 @@ class LocalDishClassifier:
         model, _, self.preprocess = open_clip.create_model_and_transforms(
             MODEL, pretrained=str(path), device=device, weights_only=True)
         self.model = model.eval().requires_grad_(False)
+    def encode(self, image):
+        with self.torch.inference_mode():
+            pixels = self.preprocess(image).unsqueeze(0).to(self.device)
+            return self.model.encode_image(pixels, normalize=True)
+
+
+class LocalDishClassifier(OpenClipVision):
+    def __init__(self, checkpoint, device='cpu'):
+        super().__init__(checkpoint, device)
+        import open_clip
+
         prompts = [text for group in (*DISH_PROMPTS.values(), *INGREDIENT_PROMPTS.values()) for text in group]
-        with torch.inference_mode():
+        with self.torch.inference_mode():
             tokens = open_clip.get_tokenizer(MODEL)(prompts).to(device)
             self.text = self.model.encode_text(tokens, normalize=True)
 
     def predict(self, rgb):
         with self.torch.inference_mode():
-            pixels = self.preprocess(Image.fromarray(rgb)).unsqueeze(0).to(self.device)
-            visual = self.model.encode_image(pixels, normalize=True)
+            visual = self.encode(Image.fromarray(rgb))
             scores = (visual @ self.text.T)[0].float().cpu().numpy()
         if not np.isfinite(scores).all():
             raise ValueError('Invalid image classifier result')

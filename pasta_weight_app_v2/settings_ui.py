@@ -128,9 +128,10 @@ def render_products():
 
 
 def render_guide():
-    from capture_guide_ui import render_sheet_guide
-    with st.expander('A4撮影補助シートの使い方'):
-        render_sheet_guide()
+    if st.session_state.get('_app_admin'):
+        from capture_guide_ui import render_sheet_guide
+        with st.expander('A4撮影補助シートの使い方'):
+            render_sheet_guide()
     st.markdown('''乾麺は重ねずに広げ、全体が入るよう真上から撮影します。
 
 アプリでカメラが使えないときは、スマートフォンの標準カメラで撮影して写真を選びます。
