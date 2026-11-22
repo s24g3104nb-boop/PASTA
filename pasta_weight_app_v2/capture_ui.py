@@ -18,7 +18,8 @@ from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
-from sheetless_area import ESTIMATOR as AREA_ESTIMATOR, estimate as estimate_area
+from sheetless_area import AREA_BOUNDARY_TOLERANCE_G, ESTIMATOR as AREA_ESTIMATOR
+from sheetless_area import estimate as estimate_area
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
@@ -334,7 +335,9 @@ def render_results(request):
             diagnostics = trace(rgb, estimator=AREA_ESTIMATOR, product=product, mode=mode,
                                 raw_sha256=request.get('raw_sha256'),
                                 parameters=dict(feature=area.area_feature,
-                                                area_ratio=getattr(area.observation, area.area_feature)))
+                                                area_ratio=getattr(area.observation, area.area_feature),
+                                                isolated_border_speck_filter=True,
+                                                boundary_tolerance_g=AREA_BOUNDARY_TOLERANCE_G))
             render_weight_result(weight=area.weight_g, product=product, rgb=rgb, mode=mode,
                                  using_demo=False, detected_count=0, estimator=AREA_ESTIMATOR,
                                  diagnostics=diagnostics, explanation='乾麺の可視面積による概算')

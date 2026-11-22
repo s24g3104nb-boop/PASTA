@@ -3,7 +3,8 @@ import cv2
 import numpy as np
 import pytest
 
-from pasta_weight_app_v2.sheetless_area import AreaModel, estimate
+from pasta_weight_app_v2 import sheetless_area
+from pasta_weight_app_v2.sheetless_area import AreaModel, Observation, estimate
 
 
 def spread(strands):
@@ -61,3 +62,30 @@ def test_invalid_area_model_is_rejected():
         AreaModel('image_fraction', -100, 20, .1, .2)
     with pytest.raises(ValueError):
         AreaModel('image_fraction', float('nan'), 0, .1, .2)
+
+
+def test_ignores_tiny_detached_border_reflection():
+    photo = spread(36)
+    clean = estimate(photo)
+    photo[:4, 305:315] = (220, 180, 40)
+    assert estimate(photo).weight_g == pytest.approx(clean.weight_g)
+
+
+def test_checks_border_fragment_near_pasta():
+    photo = spread(36)[54:].copy()
+    photo[:3, 305:315] = (220, 180, 40)
+    result = estimate(photo)
+    assert result.weight_g is None
+    assert '画像の端' in result.reason
+
+
+@pytest.mark.parametrize('area,expected', [(.181, 18.1), (.179, None), (.519, 51.9), (.521, None)])
+def test_capture_tolerance_is_limited_at_both_ends(monkeypatch, area, expected):
+    model = AreaModel('area_over_length_squared', 100, 0, .2, .5)
+    monkeypatch.setattr(sheetless_area, '_load_model', lambda: model)
+    monkeypatch.setattr(sheetless_area, 'observe', lambda _: Observation(.1, .2, area))
+    actual = estimate(None).weight_g
+    if expected is None:
+        assert actual is None
+    else:
+        assert actual == pytest.approx(expected)

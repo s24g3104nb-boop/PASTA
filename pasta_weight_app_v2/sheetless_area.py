@@ -20,6 +20,9 @@ SEGMENTATION = 'opencv_hsv_lab_spread_960'
 AREA_FEATURES = ('image_fraction', 'pasta_or_dark_fraction', 'area_over_length_squared')
 MODEL_PATH = Path(__file__).with_name(f'{ESTIMATOR}.json')
 MIN_LONG_SIDE = 640
+# Small rasterization changes near a calibration endpoint should not cause
+# abrupt rejection. This allowance is for capture variation, not new weights.
+AREA_BOUNDARY_TOLERANCE_G = 2.0
 
 
 @dataclass(frozen=True)
@@ -81,7 +84,25 @@ def pasta_mask(scene):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     keep = np.zeros(count, dtype=bool)
     keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= 30
+    _discard_isolated_border_specks(labels, stats, keep)
     return keep[labels]
+
+
+def _discard_isolated_border_specks(labels, stats, keep):
+    """Keep actual clipped strands and ignore only tiny, distant edge reflections."""
+    edge = np.unique(np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1])))
+    short = np.maximum(stats[edge, cv2.CC_STAT_WIDTH], stats[edge, cv2.CC_STAT_HEIGHT]) <= 32
+    specks = edge[keep[edge] & short]
+    areas = stats[:, cv2.CC_STAT_AREA]
+    if not specks.size or areas[specks].sum() > .005 * areas[keep].sum():
+        return
+    speck_pixels = np.isin(labels, specks)
+    interior = keep[labels] & ~speck_pixels
+    # Pixels within 10 canonical pixels of another component could be an
+    # interrupted strand. Retain those components for the clipping check.
+    distance = cv2.distanceTransform((~interior).astype(np.uint8), cv2.DIST_L2, 5)
+    nearby = np.unique(labels[speck_pixels & (distance <= 10)])
+    keep[np.setdiff1d(specks, nearby)] = False
 
 
 def describe_mask(scene, mask):
@@ -131,7 +152,10 @@ def estimate(rgb):
         return Estimate(None, observation.reason, observation)
     model = _load_model()
     area = getattr(observation, model.area_feature)
-    if not model.area_min - 1e-12 <= area <= model.area_max + 1e-12:
+    weight_g = model.predict(area)
+    lower = model.predict(model.area_min) - AREA_BOUNDARY_TOLERANCE_G
+    upper = model.predict(model.area_max) + AREA_BOUNDARY_TOLERANCE_G
+    if not 0 < weight_g <= 200 or not lower <= weight_g <= upper:
         reason = '写真の面積が、この方法で比較できる範囲を外れています。'
         return Estimate(None, reason, observation, model.area_feature)
-    return Estimate(model.predict(area), '', observation, model.area_feature)
+    return Estimate(weight_g, '', observation, model.area_feature)

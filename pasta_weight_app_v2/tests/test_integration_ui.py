@@ -233,6 +233,10 @@ assert snapshot['nutrition']['kcal'] == 148.4
 
 at.button(key='measurement_to_diary').click().run()
 assert any('面積からの推定重量 約' in m.value for m in at.markdown)
+at.button(key='meal_open_cooking').click().run()
+assert any('実測 40 g' in m.value for m in at.markdown)
+at.button(key='back_to_meal_draft').click().run()
+assert any('面積からの推定重量 約' in m.value for m in at.markdown)
 next(w for w in at.text_input if w.label == '料理名').set_value('面積推定の動作確認').run()
 at.button(key='meal_save').click().run()
 meal, = entries()
