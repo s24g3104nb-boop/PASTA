@@ -84,27 +84,33 @@ def skeletonize(mask):
     raise ValueError('骨格化が収束しません。画像を確認してください。')
 
 
-def geometry(mask):
-    ys,xs=np.nonzero(mask)
-    if not len(xs):return dict(area_px=0.,length_px=0.,width_px=0.,width_ratio=0.,endpoints=0,branches=0,density=0.,border=False,components=0)
-    cropped=mask[ys.min():ys.max()+1,xs.min():xs.max()+1]
-    padded=np.pad(cropped,2)
-    sk=skeletonize(padded)
-    distance=cv2.distanceTransform((padded>0).astype(np.uint8),cv2.DIST_L2,cv2.DIST_MASK_PRECISE)
+def skeleton_measurements(mask, sk, *, width_percentile=50):
+    """Sample strand width away from branch pixels and sum unique weighted edges."""
+    distance=cv2.distanceTransform((mask>0).astype(np.uint8),cv2.DIST_L2,cv2.DIST_MASK_PRECISE)
     neighbors=cv2.filter2D(sk,-1,np.ones((3,3),np.uint8))-sk
     core=(sk>0)&(neighbors==2)
     widths=2*distance[core]-1
     widths=widths[widths>0]
-    width=float(np.median(widths)) if len(widths) else 0.
+    width=float(np.percentile(widths,width_percentile)) if len(widths) else 0.
     ratio=float(np.percentile(widths,90)/max(.1,np.percentile(widths,10))) if len(widths) else 0.
     horizontal=np.count_nonzero(sk[:,:-1]&sk[:,1:]);vertical=np.count_nonzero(sk[:-1]&sk[1:])
     diagonal1=np.count_nonzero(sk[:-1,:-1]&sk[1:,1:]&~sk[:-1,1:]&~sk[1:,:-1])
     diagonal2=np.count_nonzero(sk[:-1,1:]&sk[1:,:-1]&~sk[:-1,:-1]&~sk[1:,1:])
     ends=int(np.count_nonzero((sk>0)&(neighbors==1)))
     length=float(horizontal+vertical+math.sqrt(2)*(diagonal1+diagonal2)+ends/2)
+    return length, width, ratio, ends, int(np.count_nonzero((sk>0)&(neighbors>=3)))
+
+
+def geometry(mask):
+    ys,xs=np.nonzero(mask)
+    if not len(xs):return dict(area_px=0.,length_px=0.,width_px=0.,width_ratio=0.,endpoints=0,branches=0,density=0.,border=False,components=0)
+    cropped=mask[ys.min():ys.max()+1,xs.min():xs.max()+1]
+    padded=np.pad(cropped,2)
+    sk=skeletonize(padded)
+    length,width,ratio,ends,branches=skeleton_measurements(padded,sk)
     hull=cv2.convexHull(np.column_stack((xs,ys)).astype(np.int32))
     return dict(area_px=float(len(xs)),length_px=length,width_px=width,width_ratio=ratio,
-        endpoints=ends,branches=int(np.count_nonzero((sk>0)&(neighbors>=3))),
+        endpoints=ends,branches=branches,
         density=float(len(xs)/max(len(xs),cv2.contourArea(hull))),
         border=bool(mask[0].any() or mask[-1].any() or mask[:,0].any() or mask[:,-1].any()),
         components=int(cv2.connectedComponents(cropped,8)[0]-1))

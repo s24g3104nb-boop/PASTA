@@ -146,8 +146,7 @@ def _load_model():
     return AreaModel(**document['model'])
 
 
-def estimate(rgb):
-    observation = observe(rgb)
+def estimate_observation(observation):
     if observation.reason:
         return Estimate(None, observation.reason, observation)
     model = _load_model()
@@ -159,3 +158,7 @@ def estimate(rgb):
         reason = '写真の面積が、この方法で比較できる範囲を外れています。'
         return Estimate(None, reason, observation, model.area_feature)
     return Estimate(weight_g, '', observation, model.area_feature)
+
+
+def estimate(rgb):
+    return estimate_observation(observe(rgb))
