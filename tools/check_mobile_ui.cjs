@@ -35,7 +35,7 @@ await click(p,'ブラウザでカメラを開く');await inspect(p,'02-camera');
 await click(p,'カメラが開かない場合は写真から選ぶ');
 await p.locator('input[type=file]').setInputFiles({name:'broken.png',mimeType:'image/png',buffer:Buffer.from('broken')});await ready(p);await p.getByText('写真を読み込めませんでした。',{exact:false}).waitFor();await inspect(p,'03-upload-error');
 await click(p,'撮り直す・写真を選び直す');await p.locator('input[type=file]').setInputFiles(path.join(root,'pasta_weight_app_v2/sample_images/demo_spread_12.png'));await ready(p);await inspect(p,'04-upload-preview');
-await click(p,'この写真で解析する');await p.getByText(/1本重量が未校正/).waitFor();await inspect(p,'05-calibration-rejection');
+await click(p,'この写真で解析する');await p.getByText(/^重量を計算できません。.*1本重量が未校正/).waitFor();await inspect(p,'05-calibration-rejection');
 await nav(p,'設定');await select(p,'設定メニュー','開発・検証ツール');await click(p,'サンプルで試す');await inspect(p,'06-cg-preview');
 await click(p,'この写真で解析する');await inspect(p,'07-weight-result');
 await p.getByText('実測重量も記録する（任意）',{exact:true}).click();await p.getByRole('spinbutton',{name:'実測重量（g）',exact:true}).fill('40');await p.getByRole('spinbutton',{name:'実測重量（g）',exact:true}).press('Tab');await ready(p);
