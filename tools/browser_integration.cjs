@@ -3,6 +3,7 @@
  * Requires Playwright and Chromium; never opens the user's data directory.
  */
 const {chromium}=require('playwright');
+const {randomBytes}=require('node:crypto');
 const fs=require('fs'),os=require('os'),path=require('path');
 const {spawn,execFileSync}=require('child_process');
 const root=path.resolve(__dirname,'..');
@@ -11,6 +12,9 @@ const work=fs.mkdtempSync(path.join(os.tmpdir(),'pasta-integration-'));
 const out=path.resolve(process.argv[2]||path.join(work,'screenshots'));
 fs.mkdirSync(out,{recursive:true});
 const env={...process.env,PASTA_DATA_DIR:path.join(work,'data'),PASTA_RESEARCH_DATA_DIR:path.join(work,'research')};
+const adminPassword=randomBytes(18).toString('hex');
+const adminEnv={...env,PASTA_DATA_DIR:path.join(work,'unused-public'),PASTA_RESEARCH_DATA_DIR:path.join(work,'unused-public-research'),
+  PASTA_ADMIN_DATA_DIR:env.PASTA_DATA_DIR,PASTA_ADMIN_RESEARCH_DIR:env.PASTA_RESEARCH_DATA_DIR,PASTA_ADMIN_PASSWORD:adminPassword};
 const port=Number(process.env.PASTA_TEST_PORT||8772), url=`http://127.0.0.1:${port}`;
 const checks=[];
 function py(code){return execFileSync(python,['-c',code],{cwd:root,env,encoding:'utf8'}).trim()}
@@ -18,7 +22,7 @@ py(`import sys,os\nfrom pathlib import Path\nsys.path.insert(0,'pasta_weight_app
 // Refuse an occupied port, so this harness can never attach to a running user app.
 execFileSync(python,['-c',`import socket\ns=socket.socket()\ns.bind(('127.0.0.1',${port}))\ns.close()`],{cwd:root,env});
 const serverLog=fs.openSync(path.join(out,'server.log'),'w');
-const server=spawn(python,['-m','streamlit','run','pasta_weight_app_v2/app.py','--server.port',String(port),'--server.address','127.0.0.1','--server.headless','true','--browser.gatherUsageStats','false'],{cwd:root,env,stdio:['ignore',serverLog,serverLog]});
+const server=spawn(python,['-m','streamlit','run','pasta_weight_app_v2/admin_app.py','--server.port',String(port),'--server.address','127.0.0.1','--server.headless','true','--browser.gatherUsageStats','false'],{cwd:root,env:adminEnv,stdio:['ignore',serverLog,serverLog]});
 const image=path.join(root,'pasta_weight_app_v2/sample_images/demo_spread_12.png');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function settle(p){await p.waitForTimeout(650)}
@@ -55,10 +59,11 @@ async function a4Reference(p){const cb=p.getByTestId('stSelectbox').filter({hasT
   await cb.press('Enter');
   await settle(p)}
 async function open(p){await p.goto(url);
+  await p.getByRole('textbox',{name:'管理用パスワード'}).fill(adminPassword);
+  await p.getByRole('button',{name:'ログイン',exact:true}).click();
   await p.locator('.st-key-home_camera button').waitFor();
   await settle(p)}
 async function upload(p,file=image){await click(p,'home_camera');
-  await click(p,'camera_fallback');
   await p.locator('input[type=file]').setInputFiles(file);
   await settle(p)}
 async function research(p){await nav(p,'設定');
@@ -148,7 +153,7 @@ await input(p,'textbox','料理名','合成テスト・100gの料理');
   await p.getByText('食事記録を削除しました。',{exact:true}).waitFor();
 });
 await caseRun(b,'photo_free_unknown_nutrition_diary',390,'dark',async p=>{
-await p.getByText('写真を選ぶ・はかりの数値を記録する',{exact:true}).click();
+await p.getByText('カメラを開く・はかりの数値を記録する',{exact:true}).click();
   await click(p,'home_manual_weight');
   await selectIndex(p,'manual_only_product',3);
   await input(p,'spinbutton','はかりで測った実測重量（g）','80');

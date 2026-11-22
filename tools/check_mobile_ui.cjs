@@ -1,5 +1,6 @@
 /* Isolated CG-only Chromium acceptance test. No private database/photos are read. */
 const {chromium}=require('playwright');
+const {randomBytes}=require('node:crypto');
 const {spawn,execFileSync}=require('child_process');
 const fs=require('fs'),path=require('path'),os=require('os');
 const root=path.resolve(__dirname,'..');
@@ -8,21 +9,27 @@ fs.mkdirSync(work,{recursive:true});
 const python=process.env.PASTA_PYTHON||path.join(root,'.venv/bin/python');
 const db=path.join(work,'data/measurements.sqlite3');
 const port=process.env.PASTA_UI_PORT||'8523';
-const proc=spawn(python,['-m','streamlit','run','pasta_weight_app_v2/app.py','--server.address','127.0.0.1','--server.port',port,'--server.headless','true','--browser.gatherUsageStats','false'],{cwd:root,env:{...process.env,PASTA_DATA_DIR:path.join(work,'data')},stdio:['ignore',fs.openSync(path.join(work,'server.log'),'a'),fs.openSync(path.join(work,'server.log'),'a')]});
+const adminPassword=randomBytes(18).toString('hex');
+const proc=spawn(python,['-m','streamlit','run','pasta_weight_app_v2/admin_app.py','--server.address','127.0.0.1','--server.port',port,'--server.headless','true','--browser.gatherUsageStats','false'],{cwd:root,env:{...process.env,PASTA_DATA_DIR:path.join(work,'unused-public'),PASTA_RESEARCH_DATA_DIR:path.join(work,'unused-research'),
+PASTA_ADMIN_DATA_DIR:path.join(work,'data'),PASTA_ADMIN_PASSWORD:adminPassword},stdio:['ignore',fs.openSync(path.join(work,'server.log'),'a'),fs.openSync(path.join(work,'server.log'),'a')]});
 let browser;const results=[];
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function ready(p){await pause(450);await p.waitForFunction(()=>!document.querySelector('[data-stale="true"]'));if(await p.locator('[data-testid=stException]').count())throw Error(await p.locator('[data-testid=stException]').innerText());}
 async function inspect(p,label){await ready(p);const d=await p.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,main:document.querySelector('[data-testid=stMain]')?.scrollWidth}));if(d.scroll>d.width+1||d.main>d.width+1)throw Error(label+' overflow '+JSON.stringify(d));results.push(label);console.log('PASS '+label);await p.screenshot({path:path.join(work,label+'.png'),fullPage:true});}
 async function click(p,name){await p.getByRole('button',{name,exact:true}).click();await ready(p);}
 async function nav(p,name){await p.locator('.st-key-main_nav [data-testid=stRadioOption]').filter({hasText:name}).click();await ready(p);}
-async function select(p,name,value){await p.getByRole('combobox',{name,exact:true}).click();await p.getByRole('option',{name:value,exact:true}).click();await ready(p);}
+async function select(p,name,value){const combo=p.getByRole('combobox',{name,exact:true});await combo.click();await combo.press('ArrowDown');await p.getByRole('option',{name:value,exact:true}).click();await ready(p);}
 function sql(statement){execFileSync(python,['-c','import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as c:c.executescript(sys.argv[2])',db,statement]);}
 (async()=>{
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:'+port+'/_stcore/health')).ok)break;}catch{}await pause(200);}
 browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
 const p=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,colorScheme:'light'});
-await p.goto('http://127.0.0.1:'+port);await p.getByRole('button',{name:'乾麺の重さをはかる',exact:true}).waitFor();await inspect(p,'01-home-light');
-await click(p,'乾麺の重さをはかる');await inspect(p,'02-camera');
+await p.goto('http://127.0.0.1:'+port);
+await p.getByRole('textbox',{name:'管理用パスワード'}).fill(adminPassword);
+await p.getByRole('button',{name:'ログイン',exact:true}).click();
+await p.getByRole('button',{name:'乾麺の重さをはかる',exact:true}).waitFor();await inspect(p,'01-home-light');
+await p.getByText('カメラを開く・はかりの数値を記録する',{exact:true}).click();
+await click(p,'ブラウザでカメラを開く');await inspect(p,'02-camera');
 await click(p,'カメラが開かない場合は写真から選ぶ');
 await p.locator('input[type=file]').setInputFiles({name:'broken.png',mimeType:'image/png',buffer:Buffer.from('broken')});await ready(p);await p.getByText('写真を読み込めませんでした。',{exact:false}).waitFor();await inspect(p,'03-upload-error');
 await click(p,'撮り直す・写真を選び直す');await p.locator('input[type=file]').setInputFiles(path.join(root,'pasta_weight_app_v2/sample_images/demo_spread_12.png'));await ready(p);await inspect(p,'04-upload-preview');
@@ -33,7 +40,7 @@ await p.getByText('実測重量も記録する（任意）',{exact:true}).click(
 await click(p,'履歴に保存');await p.getByRole('button',{name:'この乾麺で料理を記録する',exact:true}).waitFor();if(!await p.getByRole('button',{name:'履歴に保存',exact:true}).isDisabled())throw Error('save not disabled');
 await click(p,'この乾麺で料理を記録する');await p.getByRole('textbox',{name:'料理名',exact:true}).fill('テストのトマトパスタ');await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).fill('CGによる授業用テスト');await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).press('Tab');await ready(p);
 await p.locator('input[type=file]').setInputFiles(path.join(root,'pasta_weight_app_v2/sample_images/demo_spread_12.png'));await ready(p);await inspect(p,'08-meal-editor-photo');
-await nav(p,'ホーム');await click(p,'食べたパスタを記録する');if(await p.getByRole('textbox',{name:'料理名',exact:true}).inputValue()!=='テストのトマトパスタ')throw Error('draft lost');await inspect(p,'09-draft-restored');
+await nav(p,'ホーム');await click(p,'完成した料理を記録する');if(await p.getByRole('textbox',{name:'料理名',exact:true}).inputValue()!=='テストのトマトパスタ')throw Error('draft lost');await inspect(p,'09-draft-restored');
 sql("CREATE TRIGGER reject_test BEFORE INSERT ON meal_entries BEGIN SELECT RAISE(ABORT,'simulated disk failure'); END;");
 await click(p,'食事記録を保存');await p.getByText('保存できませんでした。入力内容は残っています。',{exact:false}).waitFor();await inspect(p,'10-save-failure-retained');
 sql('DROP TRIGGER reject_test;');await click(p,'食事記録を保存');await p.getByRole('button',{name:'記録を編集する',exact:true}).waitFor();await inspect(p,'11-meal-detail');
