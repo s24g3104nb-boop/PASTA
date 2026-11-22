@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "status": "experimental_not_independently_validated",
+  "feature_names": [
+    "yellow_area_over_yellow_plus_dark_pixels",
+    "yellow_area_over_projected_length_squared"
+  ],
+  "segmentation": "opencv_hsv_lab_fixed_thresholds",
+  "canonical_long_side_px": 960,
+  "dark_background_v_threshold": 90,
+  "dark_background_s_max": 210,
+  "scaler_mean": [
+    0.3601205547067409,
+    0.38920481189321243
+  ],
+  "scaler_scale": [
+    0.19103831054387263,
+    0.22205274085483415
+  ],
+  "coef": [
+    7.960765352985883,
+    5.692095647486298
+  ],
+  "intercept": 57.69230769230769,
+  "feature_training_min": [
+    0.14456403373262086,
+    0.14246048116350682
+  ],
+  "feature_training_max": [
+    0.7909312588364377,
+    0.9055875685208942
+  ],
+  "supported_nominal_g": [
+    20,
+    100
+  ],
+  "training_images": 26,
+  "quality_thresholds": {
+    "min_yellow_fraction": 0.025,
+    "max_yellow_fraction": 0.73,
+    "min_dark_fraction": 0.09,
+    "min_projected_length_px": 25
+  },
+  "metrics": {
+    "training_mae_g": 16.24,
+    "training_max_error_g": 48.24,
+    "exploratory_held_out_nov05_mae_g": 22.33,
+    "exploratory_held_out_nov18_mae_g": 8.83,
+    "exploratory_held_out_nov08_mae_g": 19.13
+  },
+  "caveats": "Nominal weight labels; shared physical material may span images and weight groups. No independent-test MAE. Roughly single-layer, near-overhead, yellow dry spaghetti on a dark low-gloss tray only. Not an absolute scale measurement.",
+  "source_images_included": false
+}
