@@ -9,6 +9,7 @@ import sys
 def verify_files(root, *, source=False):
     if source:
         required = ('pasta_weight_app_v2/app.py', 'pasta_weight_app_v2/ui/design.css',
+                    'pasta_weight_app_v2/sheetless_area.py', 'pasta_weight_app_v2/sheetless_area_v2.json',
                     'pasta_weight_app_v2/manual_weight_ui.py', 'pasta_weight_app_v2/research_collection_ui.py',
                     'docs/assets/capture_sheet/Pasta_Lens_A4_reference_v1.pdf', '.streamlit/config.toml')
         for relative in required:

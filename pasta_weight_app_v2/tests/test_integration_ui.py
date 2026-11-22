@@ -102,7 +102,7 @@ assert request['_detection_result'].count==6
 geometry=request['_geometry']
 assert geometry['mask_area_px']>0 and geometry['quantile_length_px']>0 and geometry['width_over_length']>0
 assert request['product']['id'] is None
-assert any('確認済みの汎用重量推定モデルはありません' in i.value for i in at.info)
+assert any('面積から重量を推定できませんでした' in w.value for w in at.warning)
 assert not at.error and not any(m.label=='推定重量' for m in at.metric)
 assert not any('製品を登録' in b.label or b.key=='analyze_photo' for b in at.button)
 
@@ -156,7 +156,7 @@ capture_ui.list_products=read_products
 at.run()
 assert not at.exception and not at.error
 assert at.session_state['result_request']['_geometry']['mask_area_px']==0
-assert any('本数を検出できません' in w.value for w in at.warning)
+assert any('面積から重量を推定できませんでした' in w.value for w in at.warning)
 assert any('登録済みの製品を読み込めませんでした' in w.value for w in at.warning)
 assert not any('汎用重量推定モデル' in i.value for i in at.info)
 assert not any(m.label=='推定重量' for m in at.metric)
@@ -177,4 +177,68 @@ assert not at.exception,at.exception
 assert at.button(key='home_camera')
 assert at.button(key='recent_synthetic-test')
 assert any('写真なしの記録' in m.value for m in at.markdown)
+''', tmp_path)
+
+
+def test_area_estimate_flows_to_measured_nutrition_and_calendar(tmp_path):
+    run_app_script(r'''
+import sys
+from io import BytesIO
+from streamlit.testing.v1 import AppTest
+from PIL import Image
+import numpy as np
+sys.path.insert(0, 'pasta_weight_app_v2')
+import capture_ui
+from cooking import dry_snapshot
+from meal_diary import entries
+from storage import list_measurements, list_products
+
+at = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
+old_products = list_products()
+at.button(key='home_upload').click().run()
+image = np.full((480, 640, 3), 42, np.uint8)
+for y in range(60, 420, 10):
+    image[y:y + 5, 64:576] = (220, 180, 40)
+photo = BytesIO()
+Image.fromarray(image).save(photo, 'PNG')
+at.session_state['capture_photo'] = photo
+
+def must_not_count(*args, **kwargs):
+    raise AssertionError('面積から重量を出せる場合は本数検出が不要です')
+
+capture_ui.detect_spread = must_not_count
+at.run()
+assert not at.exception and not at.error
+area = at.session_state['result_request']['_area_estimate']
+assert area.weight_g is not None
+assert any(m.label == '面積からの推定重量' and m.value == f'約{area.weight_g:.0f} g' for m in at.metric)
+assert any('精度は未検証' in c.value for c in at.caption)
+assert not any('製品を登録' in b.label or b.key == 'analyze_photo' for b in at.button)
+assert any(m.label == '乾麺分のカロリー' and m.value == f'{area.weight_g * 3.71:.1f} kcal'
+           for m in at.metric)
+
+at.checkbox(key='actual_known').check().run()
+at.number_input(key='actual_weight').set_value(40.).run()
+assert any(m.value == '148.4 kcal' for m in at.metric)
+assert at.session_state['result_request']['_area_estimate'] == area
+at.button(key='measurement_save').click().run()
+assert at.button(key='measurement_save').disabled and not at.error
+row, = list_measurements()
+assert row['estimated_g'] == area.weight_g and row['actual_g'] == 40.
+assert row['estimator'] == 'sheetless_area_v2' and row['detected_count'] == 0
+assert row['kcal'] == 148.4 and list_products() == old_products
+snapshot = dry_snapshot(row)
+assert snapshot['weight_source'] == 'actual' and snapshot['dry_weight_g'] == 40.
+assert snapshot['nutrition']['kcal'] == 148.4
+
+at.button(key='measurement_to_diary').click().run()
+assert any('面積からの推定重量 約' in m.value for m in at.markdown)
+next(w for w in at.text_input if w.label == '料理名').set_value('面積推定の動作確認').run()
+at.button(key='meal_save').click().run()
+meal, = entries()
+assert meal['measurement_id'] == row['id'] and meal['nutrition_snapshot']['kcal'] == 148.4
+at.button(key='meal_detail_back').click().run()
+at.radio(key='diary_view').set_value('カレンダー').run()
+assert at.button(key='diary_add_selected_day') and not at.exception
+assert len(list_measurements()) == 1
 ''', tmp_path)

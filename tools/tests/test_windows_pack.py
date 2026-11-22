@@ -1,5 +1,5 @@
 from pathlib import Path
-import sys,zipfile,hashlib,subprocess
+import sys,zipfile,hashlib,subprocess,json
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from build_windows_pack import inputs,build
 
@@ -10,7 +10,7 @@ def test_allowlist_excludes_private_data_and_only_synthetic_images():
     names=[p.as_posix() for p in inputs(ROOT)]
     assert not any('/data/' in p or '/models/' in p or p.endswith(('.sqlite3','.db','.jpg','.csv','.zip')) for p in names)
     assert {p for p in names if p.endswith('.png')}=={'pasta_weight_app_v2/sample_images/demo_spread_12.png','pasta_weight_app_v2/sample_images/demo_bundle_16.png'}
-    for required in ('manual_weight_ui.py','manual_measurement_storage.py','capture_guide_ui.py','research_collection_ui.py'):
+    for required in ('sheetless_area_v2.json','sheetless_area.py','manual_weight_ui.py','manual_measurement_storage.py','capture_guide_ui.py','research_collection_ui.py'):
         assert 'pasta_weight_app_v2/'+required in names
 
 
@@ -19,6 +19,9 @@ def test_archive_hashes_assets_and_bat_contracts(tmp_path):
     with zipfile.ZipFile(archive) as z:
         z.extractall(tmp_path/'unpack')
     pack=tmp_path/'unpack/Pasta_Lens_test'
+    model = 'pasta_weight_app_v2/sheetless_area_v2.json'
+    assert json.loads((pack/'RELEASE_INFO.json').read_text())['model_files'] == [model]
+    assert (pack/model).read_bytes() == (ROOT/model).read_bytes()
     for line in (pack/'MANIFEST_SHA256.txt').read_text().splitlines():
         digest,relative=line.split('  ',1)
         assert hashlib.sha256((pack/relative).read_bytes()).hexdigest()==digest

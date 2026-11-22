@@ -1,0 +1,23 @@
+{
+  "version": "sheetless_area_v2",
+  "segmentation": "opencv_hsv_lab_spread_960",
+  "status": "exploratory_unvalidated",
+  "model": {
+    "area_feature": "area_over_length_squared",
+    "slope": 130.37630929769972,
+    "intercept_g": -14.592924334789545,
+    "area_min": 0.25929871807009347,
+    "area_max": 0.5080668411918616
+  },
+  "training_images": 4,
+  "training_weight_range_g": [
+    20.0,
+    50.0
+  ],
+  "training_metrics": {
+    "training_mae_g": 1.3521923881472606,
+    "training_rmse_g": 1.4254341779681639,
+    "training_max_error_g": 1.9178703091085154
+  },
+  "independent_evaluation": null
+}

@@ -12,7 +12,7 @@ def inputs(root):
     for path in (root/APP).rglob('*.py'):
         rel=path.relative_to(root)
         if (len(rel.parts)==2 or rel.parts[1] in {'pasta_ml','experiments','tests'}) and not set(rel.parts)&DENIED_PARTS and not path.is_symlink():files.append(rel)
-    files += [Path(APP)/n for n in ('requirements.txt','requirements-dev.txt','requirements-research.txt','requirements-local-vision.txt','ui/design.css','sample_images/demo_spread_12.png','sample_images/demo_bundle_16.png')]
+    files += [Path(APP)/n for n in ('requirements.txt','requirements-dev.txt','requirements-research.txt','requirements-local-vision.txt','sheetless_area_v2.json','ui/design.css','sample_images/demo_spread_12.png','sample_images/demo_bundle_16.png')]
     files += [Path('.streamlit/config.toml')]
     files += [Path('tools/check_safari_layout.py'), Path('tools/diagnose_photo_manifest.py'), Path('tools/foundation_mask_editor.html')]
     files += [Path('docs/assets/capture_sheet')/n for n in ('Pasta_Lens_A4_reference_v1.pdf','Pasta_Lens_A4_reference_v1.svg','geometry.json','README_JA.md')]
@@ -38,7 +38,7 @@ def build(root,output):
     requirements=(root/'packaging/windows/requirements.txt').read_text().replace('-r ../../pasta_weight_app_v2/requirements.txt', '-r pasta_weight_app_v2/requirements.txt')
     (output/'requirements.txt').write_text(requirements)
     shutil.copy2(root/'packaging/windows/.gitignore',output/'.gitignore')
-    info=dict(date=datetime.now(timezone(timedelta(hours=9))).date().isoformat(),branch=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),source=('working_tree_including_uncommitted_changes' if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip() else 'committed_tree'),personal_data_included=False,models_included=False)
+    info=dict(date=datetime.now(timezone(timedelta(hours=9))).date().isoformat(),branch=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),source=('working_tree_including_uncommitted_changes' if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip() else 'committed_tree'),personal_data_included=False,models_included=True,model_files=[APP + '/sheetless_area_v2.json'])
     (output/'RELEASE_INFO.json').write_text(json.dumps(info,ensure_ascii=False,indent=2))
     from importlib.metadata import version
     (output/'TESTED_VERSIONS.txt').write_text('Linux/Python3.12 verification environment; NOT a Windows lock file\n'+'\n'.join(n+'=='+version(n) for n in ('streamlit','opencv-python-headless','numpy','Pillow','pandas'))+'\n')

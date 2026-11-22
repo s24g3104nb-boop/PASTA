@@ -13,6 +13,8 @@ from cooking_storage import list_cooking_sessions
 from meal_diary import delete, entries, get, photo_path, save
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
+from ui_shell import dry_weight_label
+from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 from operation_logs import RECORDS, log_error
 JST = timezone(timedelta(hours=9))
@@ -174,7 +176,10 @@ def _show_measurement(snapshot):
     estimated = snapshot.get('estimated_g')
     actual = snapshot.get('actual_g')
     if estimated is not None:
-        st.write(f'推定重量 {estimated:g} g')
+        if snapshot.get('estimator') == AREA_ESTIMATOR:
+            st.write(f'面積からの推定重量 約{estimated:.0f} g（概算）')
+        else:
+            st.write(f'推定重量 {estimated:g} g')
     if actual is not None:
         st.write(f'実測重量 {actual:g} g')
     else:
@@ -233,7 +238,7 @@ def _link_options(draft, db_path):
             options.append(draft['measurement_id'])
         _field(st.selectbox, '乾麺の記録', draft, 'measurement_id', options=options,
                format_func=lambda ident: '関連付けない' if ident is None else
-               (f"{measurement_map[ident]['product_name']} · " + (f"実測 {measurement_map[ident]['actual_g']:g} g" if measurement_map[ident]['estimated_g'] is None else f"推定 {measurement_map[ident]['estimated_g']:g} g") + f" · #{ident}"
+               (f"{measurement_map[ident]['product_name']} · {dry_weight_label(measurement_map[ident])} · #{ident}"
                 if ident in measurement_map else f'保存済みの乾麺 #{ident}'))
         chosen = measurement_map.get(draft['measurement_id'])
         if chosen:

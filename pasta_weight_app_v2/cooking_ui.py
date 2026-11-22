@@ -13,6 +13,7 @@ from dish_classifier import DISH_NAMES, INGREDIENT_HINTS
 from standard_recipes import recipe_choices
 from storage import DEFAULT_DB, list_measurements
 from ingredient_ui import render_ingredients
+from ui_shell import dry_weight_label
 
 
 def _diary_link(session, key):
@@ -65,9 +66,7 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     measurement_id = st.selectbox(
         'この料理に使った乾麺の記録', [None] + list(mapping),
         format_func=lambda key: '履歴を選択してください' if key is None else
-        f"ID {key} | {mapping[key]['created_at']} | {mapping[key]['product_name']} | " +
-        ('実測 ' + str(mapping[key]['actual_g']) + 'g' if mapping[key]['estimated_g'] is None
-         else f"推定 {mapping[key]['estimated_g']}g" + (f" / 実測 {mapping[key]['actual_g']}g" if mapping[key]['actual_g'] is not None else '')),
+        f"ID {key} | {mapping[key]['created_at']} | {mapping[key]['product_name']} | {dry_weight_label(mapping[key])}",
         key='cooking_measurement')
     if measurement_id is None:
         _remember_controls()
@@ -84,8 +83,7 @@ def render_cooking_tab(db_path=DEFAULT_DB):
         st.warning('この履歴はCGまたはデモ製品の値です。料理計算もデモで、実際の食事管理には使えません。')
     elif kind == 'unknown':
         st.warning('旧履歴のため写真の来歴が不明です。実写・製品情報を確認してください。')
-    weight_source = '実測重量' if snapshot['weight_source'] == 'actual' else '推定重量（実測なし）'
-    st.write(f"使用する乾麺: {snapshot['dry_weight_g']:.2f}g / {weight_source}")
+    st.write(f'使用する乾麺　{dry_weight_label(record)}')
     st.caption(snapshot['nutrition_source'])
     sessions = [r for r in list_cooking_sessions(db_path) if st.session_state.get('_app_admin') or r['dry_snapshot'].get('source_kind') != 'synthetic']
     used_sessions = [item for item in sessions if item['measurement_id'] == measurement_id]

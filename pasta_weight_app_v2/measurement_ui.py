@@ -9,6 +9,7 @@ from storage import DEFAULT_DB, save_measurement
 from measurement_diagnostics import trace
 from nutrition_state import (STANDARD_NUTRITION_NOTE, has_nutrition, snapshot_for_nutrition,
                              standard_nutrition_used)
+from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 
 def _submission_token(rgb, product, mode, weight, detected_count, estimator):
@@ -39,7 +40,12 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     st.subheader('あなたのパスタ')
     with st.container(key='weight_hero'):
         label = '入力した本数からの重量' if estimator == 'manual_count' else '推定重量'
-        st.metric(label, f'{weight:.1f} g')
+        if estimator == AREA_ESTIMATOR:
+            st.metric('面積からの推定重量', f'約{weight:.0f} g')
+            st.caption('乾麺の見えている面積からの概算です。20〜50 gの写真を換算に使用しました。'
+                       '新しい試料での精度は未検証です。')
+        else:
+            st.metric(label, f'{weight:.1f} g')
     has_actual = st.checkbox('実測重量も記録する（任意）',
                              value=draft.get('known', False), disabled=bool(receipt),
                              key='actual_known', on_change=_remember_actual, args=(token,))
@@ -72,8 +78,9 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
         with st.expander('推定方式と計算の詳細'):
             st.caption(f'使用方式: {estimator}')
             st.caption(explanation)
-    st.caption('推定の信頼性: CGテスト用' if using_demo else
-               '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
+    if estimator != AREA_ESTIMATOR:
+        st.caption('推定の信頼性: CGテスト用' if using_demo else
+                   '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
     if st.button('履歴に保存', type='primary', width='stretch',
                  key='measurement_save', disabled=bool(receipt) or (has_actual and actual is None)):
         try:
@@ -104,8 +111,11 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
         from ui_shell import start_capture
         st.button('もう一度撮影', on_click=start_capture, args=('スマホで撮影' if using_demo else st.session_state.get('capture_resume_source', '写真をアップロード'),),
                   key='result_retake', width='stretch')
-    st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
-               '電子はかりで確認してください。')
+    if estimator == AREA_ESTIMATOR:
+        st.caption('撮影距離や麺の重なりで誤差が出ます。はかりで測った重量を入力すると、栄養計算に反映します。')
+    else:
+        st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
+                   '電子はかりで確認してください。')
 
 
 def render_regression_measurement(active, *, rgb, product, mode, using_demo, db_path=DEFAULT_DB, show_image=True):

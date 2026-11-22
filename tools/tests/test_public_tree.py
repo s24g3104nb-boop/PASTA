@@ -17,3 +17,12 @@ def test_credential_content_without_printing_values():
     assert module.has_secret(b'ghp_'+b'a'*36)
     assert module.has_secret(b'AKIA'+b'0'*16)
     assert not module.has_secret(b'--token YOUR_TOKEN; hashlib.sha256(image)')
+
+
+def test_only_reviewed_reference_coefficients_are_public():
+    reference = module.LEGACY_REFERENCE
+    blob = (Path(__file__).resolve().parents[2] / reference).read_bytes()
+    assert not module.unsafe(reference)
+    assert not module.unreviewed_model(reference, blob)
+    assert module.unreviewed_model(reference, blob + b'private metadata')
+    assert module.unsafe(reference.replace('v1.json', 'v2.json'))

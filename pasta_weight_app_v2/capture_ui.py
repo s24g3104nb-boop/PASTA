@@ -18,6 +18,7 @@ from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
+from sheetless_area import ESTIMATOR as AREA_ESTIMATOR, estimate as estimate_area
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
@@ -39,8 +40,8 @@ def render_capture():
     generation=st.session_state.get('capture_generation',0)
     st.button('ホームに戻る', icon=':material/arrow_back:', on_click=lambda: st.session_state.pop('capture_source',None))
     st.subheader('パスタを撮影' if source_kind=='スマホで撮影' else '写真からはじめる')
-    st.caption('乾麺をできるだけ平らに広げ、重なりを減らして真上から撮影してください。')
-    st.caption('無地で反射の少ない背景を使い、麺の両端が写るように余白を残してください。')
+    st.caption('乾麺をできるだけ平らに広げ、重なりを少なくして、真上から撮影してください。')
+    st.caption('黒などの暗く無地で反射の少ない背景を使い、麺の両端が写るように余白を残してください。')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
     modes = ['広げた状態', '束の断面']
     admin = st.session_state.get('_app_admin', False)
@@ -316,6 +317,29 @@ def render_results(request):
                 product = _optional_result_product(request)
             recovery(product,rgb,synthetic=using_demo)
             return
+    area_reason = None
+    if not admin and not using_demo and not using_regression and mode == '広げた状態':
+        if '_area_estimate' not in request:
+            try:
+                with st.spinner('写真から乾麺の面積を調べています…'):
+                    request['_area_estimate'] = estimate_area(rgb)
+            except Exception:
+                log_error(WEIGHT, '面積による重量推定 失敗')
+                request['_area_estimate'] = None
+        area = request['_area_estimate']
+        if area is not None and area.weight_g is not None:
+            if 'saved_product' not in request:
+                product = _optional_result_product(request)
+            _log_estimate_outcome(request, '面積による重量推定 完了')
+            diagnostics = trace(rgb, estimator=AREA_ESTIMATOR, product=product, mode=mode,
+                                raw_sha256=request.get('raw_sha256'),
+                                parameters=dict(feature=area.area_feature,
+                                                area_ratio=getattr(area.observation, area.area_feature)))
+            render_weight_result(weight=area.weight_g, product=product, rgb=rgb, mode=mode,
+                                 using_demo=False, detected_count=0, estimator=AREA_ESTIMATOR,
+                                 diagnostics=diagnostics, explanation='乾麺の可視面積による概算')
+            return
+        area_reason = area.reason if area is not None else '面積の解析を完了できませんでした。'
     if using_regression:
         succeeded = False
         if request['model_error']:
@@ -380,16 +404,13 @@ def render_results(request):
         if admin:
             st.warning('重量を計算できません。' + ' '.join(decision.reasons))
         else:
-            photo_reasons = [reason for code, reason in zip(decision.reason_codes, decision.reasons)
-                             if code != 'uncalibrated']
-            if photo_reasons:
-                st.warning('写真から重さを推定できませんでした。' + ' '.join(photo_reasons))
-            elif not decision.foreground_pixels:
-                st.warning('乾麺の領域を確認できませんでした。背景を変え、麺全体を真上から撮ってください。')
-            elif product['id'] is None:
-                st.info('この写真に適用できる確認済みの汎用重量推定モデルはありません。実測重量を入力して続けられます。')
+            if area_reason:
+                st.warning('面積から重量を推定できませんでした。' + area_reason)
             else:
-                st.info('この製品は写真から重さを算出するための値が未設定です。実測重量を入力して続けられます。')
+                photo_reasons = [reason for code, reason in zip(decision.reason_codes, decision.reasons)
+                                 if code != 'uncalibrated']
+                st.warning('写真から重さを推定できませんでした。' +
+                           (' '.join(photo_reasons) or 'この撮影方法では製品の1本重量が必要です。'))
         recovery(product, rgb, synthetic=using_demo)
         return
 

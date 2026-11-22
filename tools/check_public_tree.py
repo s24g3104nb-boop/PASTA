@@ -1,5 +1,6 @@
 """公開Gitの追跡予定と過去コミットのパスを検査する。私有データの内容は出力しない。"""
 from pathlib import PurePosixPath
+import hashlib
 import subprocess
 import sys
 import re
@@ -7,6 +8,15 @@ import re
 ALLOWED_CSV={'dataset/dataset_template.csv','dataset/ml_template.csv'}
 ALLOWED_IMAGES={'pasta_weight_app_v2/sample_images/demo_bundle_16.png',
                 'pasta_weight_app_v2/sample_images/demo_spread_12.png'}
+# Reviewed public coefficients from the inherited branch. Other model files stay private.
+LEGACY_REFERENCE = 'pasta_weight_app_v2/models/sheetless_reference_v1.json'
+LEGACY_REFERENCE_SHA256 = 'd5b1cfae756f3430041a276b723b852b1da966336d0229109a38a2cc57a163a4'
+
+
+def unreviewed_model(path, content):
+    return path == LEGACY_REFERENCE and hashlib.sha256(content).hexdigest() != LEGACY_REFERENCE_SHA256
+
+
 DENIED_SUFFIX={'.jpg','.jpeg','.heic','.heif','.webp','.mpo','.png','.zip','.sqlite3','.sqlite','.db','.backup','.pt','.pth','.safetensors','.onnx','.joblib','.pkl','.pem','.key'}
 SECRET_PATTERNS = [
     rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
@@ -22,6 +32,8 @@ def has_secret(content):
 
 
 def unsafe(path):
+    if path == LEGACY_REFERENCE:
+        return False  # The content check pins this exact file.
     p=PurePosixPath(path)
     if any(part.lower() in {'data','user_data','pasta_lens_private_dataset','pasta_lens_42_photos','user_photos','meal_photos','backups','models','logs','foundation-private','admin_data'} for part in p.parts):return True
     if '.sqlite3-' in p.name or p.name.endswith('.annotation.json'):return True
@@ -48,10 +60,14 @@ def main():
             if ' ' in line:
                 oid,path=line.split(' ',1);objects.add((oid,path))
     secret_paths=set()
+    unreviewed_paths=set()
     for oid,path in objects:
         if subprocess.check_output(['git','cat-file','-t',oid]).strip()!=b'blob':continue
         content=subprocess.check_output(['git','cat-file','blob',oid])
+        if unreviewed_model(path, content):unreviewed_paths.add(path)
         if has_secret(content):secret_paths.add(path)
+    if unreviewed_paths:
+        print('未確認のモデル設定:', *sorted(unreviewed_paths), sep='\n');return 1
     if secret_paths:
         print('秘密情報候補を含む公開ファイル（値は非表示）:',*sorted(secret_paths),sep='\n');return 1
     print('追跡対象'+('・全履歴' if '--history' in sys.argv else '')+'の私有データパス検査: 問題なし')

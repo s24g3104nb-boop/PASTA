@@ -3,7 +3,19 @@ from html import escape
 from pathlib import Path
 import streamlit as st
 
+from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
+
 PAGES = ['ホーム', '記録', '設定']
+
+
+def dry_weight_label(row):
+    if row['actual_g'] is not None:
+        return f"実測 {row['actual_g']:g} g"
+    if row['estimated_g'] is None:
+        return '重量未登録'
+    if row.get('estimator') == AREA_ESTIMATOR:
+        return f"推定 約{row['estimated_g']:.0f} g"
+    return f"推定 {row['estimated_g']:g} g"
 
 
 def shell():

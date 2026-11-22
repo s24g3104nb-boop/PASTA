@@ -6,6 +6,7 @@ import streamlit as st
 from storage import DEFAULT_DB, list_measurements
 from history_actions import change_measurement
 from ui_shell import empty_state
+from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 
 def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
@@ -19,13 +20,23 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
             st.markdown(f"**{row['product_name']}**")
             weight=row['actual_g'] if row['estimator']=='manual_weight' else row['estimated_g']
             calories=f"{row['kcal']:.0f} kcal" if row['kcal'] is not None else '栄養未計算'
-            st.markdown(f"### {weight:.1f} g · {calories}")
+            if row['estimator'] == AREA_ESTIMATOR:
+                if row['actual_g'] is not None:
+                    st.markdown(f"### 実測 {row['actual_g']:g} g · {calories}")
+                    st.caption(f'面積からの推定重量 約{weight:.0f} g（概算）')
+                else:
+                    st.markdown(f"### 約{weight:.0f} g · {calories}")
+                    st.caption('写真の面積から推定した概算です。')
+            else:
+                st.markdown(f"### {weight:.1f} g · {calories}")
             if row['estimator']=='manual_weight':st.caption('実測重量（推定なし）')
             tags=[]
-            if row['actual_g'] is not None:tags.append(f"実測値登録済み {row['actual_g']:.1f} g")
+            if row['actual_g'] is not None and row['estimator'] != AREA_ESTIMATOR:
+                tags.append(f"実測値登録済み {row['actual_g']:.1f} g")
             if row['estimator']=='manual_count':tags.append('本数を手動修正')
             if row['source_kind']!='real':tags.append('CG・デモ / 来歴未確認')
-            st.caption(' / '.join(tags) if tags else '推定値 · 実測未登録')
+            if tags or row['actual_g'] is None:
+                st.caption(' / '.join(tags) if tags else '推定値 · 実測未登録')
         if compact:return
         with st.expander('詳細・重量の修正'):
             if path.is_file():st.image(str(path),caption='保存した写真',width='stretch')
@@ -86,7 +97,7 @@ def render_history(db_path=DEFAULT_DB):
     with st.expander('誤差の集計・一覧データ'):
         frame=pd.DataFrame(matches)
         shown=frame.copy()
-        shown.loc[shown.estimator.str.startswith('ridge:'),'detected_count']=None
+        shown.loc[shown.estimator.str.startswith('ridge:') | (shown.estimator == AREA_ESTIMATOR), 'detected_count'] = None
         st.dataframe(shown[['created_at','product_name','mode','detected_count','estimated_g','actual_g','kcal','estimator','source_kind']],hide_index=True,width='stretch')
         measured=frame[(frame.source_kind=='real') & (frame.actual_g>0) & frame.estimated_g.notna()].copy()
         if len(measured):

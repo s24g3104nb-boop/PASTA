@@ -151,7 +151,7 @@ def render_guide():
         from capture_guide_ui import render_sheet_guide
         with st.expander('A4撮影補助シートの使い方'):
             render_sheet_guide()
-    st.markdown('''乾麺は重ねずに広げ、全体が入るよう真上から撮影します。
+    st.markdown('''乾麺は反射の少ない暗い無地の背景に平らに広げ、全体が入るよう真上から撮影します。
 
 アプリでカメラが使えないときは、スマートフォンの標準カメラで撮影して写真を選びます。
 
