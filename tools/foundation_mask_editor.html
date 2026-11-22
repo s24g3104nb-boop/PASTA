@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Pasta Lens 可視領域の注釈</title>
+<style>
+:root { color-scheme: light dark; font: 1rem/1.5 system-ui, sans-serif }
+body { max-width: 1100px; margin: auto; padding: 1rem }
+h1 { margin: 0 0 .5rem; font-size: 1.6rem }
+fieldset { border: 1px solid gray; border-radius: .5rem; display: flex; gap: .75rem; flex-wrap: wrap; align-items: center }
+label, button, output { display: inline-block }
+button, select, input { font: inherit; min-height: 44px }
+canvas { display: block; width: 100%; height: auto; margin-block: .75rem; touch-action: none }
+[hidden] { display: none }
+</style>
+</head>
+<body>
+<h1>乾麺の見えている部分を塗る</h1>
+<p>原本を選び、麺だけを塗ります。離れた麺には「線」、束には「多角形」が使えます。反射や背景は「消す」で修正します。写真と注釈はこの端末で処理します。</p>
+<p><label>原本 <input id="photo" type="file" accept="image/jpeg,image/png,image/webp"></label></p>
+<div id="editor" hidden>
+<fieldset>
+<legend>注釈ツール</legend>
+<label>形 <select id="tool"><option value="line">線</option><option value="polygon">多角形</option></select></label>
+<label>操作 <select id="mode"><option value="add">塗る</option><option value="erase">消す</option></select></label>
+<label>線幅（原本のピクセル） <input id="width" type="number" min="1" max="300" value="6"></label>
+<button id="finish" type="button">多角形を閉じる</button>
+<button id="undo" type="button">ひとつ戻す</button>
+<label><input type="checkbox" id="show" checked> 塗った範囲を表示</label>
+</fieldset>
+<canvas id="canvas" aria-label="原本と可視領域の注釈"></canvas>
+<fieldset>
+<legend>注釈JSON</legend>
+<label>続きから編集 <input id="existing" type="file" accept=".json,application/json"></label>
+<button id="save" type="button">注釈を保存</button>
+</fieldset>
+</div>
+<p><output id="status" aria-live="polite">原本を選んでください。</output></p>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const canvas = byId("canvas");
+const mask = document.createElement("canvas");
+const brush = mask.getContext("2d");
+const ctx = canvas.getContext("2d");
+let bitmap, identity, shape, strokes = [], pending = null, active = null, generation = 0;
+
+function paint(target, stroke) {
+  const [first, ...rest] = stroke.points;
+  target.globalCompositeOperation = stroke.mode === "erase" ? "destination-out" : "source-over";
+  target.fillStyle = target.strokeStyle = "#00d8d8";
+  target.lineJoin = target.lineCap = "round";
+  target.lineWidth = stroke.width_px ?? 1;
+  target.beginPath();
+  target.moveTo(...first);
+  for (const point of rest) target.lineTo(...point);
+  if (stroke.tool === "polygon") {
+    target.closePath();
+    target.fill();
+  } else if (rest.length) {
+    target.stroke();
+  } else {
+    target.beginPath();
+    target.arc(first[0], first[1], target.lineWidth / 2, 0, 2 * Math.PI);
+    target.fill();
+  }
+}
+
+function draw() {
+  if (!bitmap) return;
+  ctx.drawImage(bitmap, 0, 0);
+  if (byId("show").checked) {
+    brush.clearRect(0, 0, mask.width, mask.height);
+    for (const stroke of strokes) paint(brush, stroke);
+    if (pending) paint(brush, pending);
+    ctx.globalAlpha = .42;
+    ctx.drawImage(mask, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+  if (pending?.tool === "polygon") {
+    ctx.strokeStyle = "#08ffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(...pending.points[0]);
+    for (const point of pending.points.slice(1)) ctx.lineTo(...point);
+    ctx.stroke();
+  }
+}
+
+function say(message) { byId("status").textContent = message; }
+
+byId("photo").addEventListener("change", async ({target}) => {
+  const run = ++generation;
+  const [file] = target.files;
+  byId("editor").hidden = true;
+  byId("existing").value = "";
+  say("原本を確認しています。");
+  try {
+    if (!file || file.size > 25 * 1024 * 1024 || !crypto.subtle) throw Error();
+    const data = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    const decoded = await createImageBitmap(file, {imageOrientation: "from-image"});
+    if (run !== generation || decoded.width * decoded.height > 25000000 || Math.min(decoded.width, decoded.height) < 16) {
+      decoded.close();
+      if (run === generation) throw Error();
+      return;
+    }
+    bitmap?.close();
+    bitmap = decoded;
+    identity = Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, "0")).join("");
+    shape = [bitmap.height, bitmap.width];
+    mask.width = canvas.width = bitmap.width;
+    mask.height = canvas.height = bitmap.height;
+    strokes = [];
+    pending = active = null;
+    byId("editor").hidden = false;
+    draw();
+    say("原本を読み込みました。");
+  } catch {
+    if (run === generation) say("原本を読み込めませんでした。最新版のブラウザーで25MiB・2500万画素以内のJPEG・PNG・WebPを選んでください。");
+  }
+});
+
+function position(event) {
+  const box = canvas.getBoundingClientRect();
+  return [Math.min(canvas.width-1, Math.max(0, (event.clientX-box.left)*canvas.width/box.width)),
+    Math.min(canvas.height-1, Math.max(0, (event.clientY-box.top)*canvas.height/box.height))];
+}
+
+canvas.addEventListener("pointerdown", event => {
+  if (active !== null || event.button !== 0) return;
+  const tool = byId("tool").value;
+  const point = position(event);
+  if (tool === "polygon" && pending) {
+    pending.points.push(point);
+  } else {
+    pending = {tool, mode: byId("mode").value, points: [point]};
+    if (tool === "line") {
+      pending.width_px = Math.min(Math.max(1, Number(byId("width").value) || 1), 300, Math.max(...shape));
+      active = event.pointerId;
+      canvas.setPointerCapture(active);
+    }
+  }
+  draw();
+});
+canvas.addEventListener("pointermove", event => {
+  if (event.pointerId !== active) return;
+  pending.points.push(position(event));
+  draw();
+});
+canvas.addEventListener("pointerup", event => {
+  if (event.pointerId !== active) return;
+  pending.points.push(position(event));
+  strokes.push(pending);
+  pending = active = null;
+  draw();
+});
+canvas.addEventListener("pointercancel", () => { pending = active = null; draw(); });
+byId("tool").addEventListener("change", () => { if (!active) pending = null; draw(); });
+byId("finish").addEventListener("click", () => {
+  if (pending?.tool !== "polygon" || pending.points.length < 3) {
+    say("多角形の角を3点以上選んでください。");
+    return;
+  }
+  strokes.push(pending);
+  pending = null;
+  draw();
+  say("多角形を追加しました。");
+});
+byId("undo").addEventListener("click", () => {
+  if (active !== null) return;
+  if (pending) pending = null;
+  else strokes.pop();
+  draw();
+  say("直前の操作を戻しました。");
+});
+byId("show").addEventListener("change", draw);
+
+function valid(stroke) {
+  const {tool, mode, points, width_px: width} = stroke;
+  return ["add","erase"].includes(mode) && Array.isArray(points) &&
+    ((tool === "polygon" && points.length >= 3) ||
+     (tool === "line" && points.length >= 1 && Number.isFinite(width) && width > 0 && width <= Math.max(...shape))) &&
+    points.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) &&
+      p[0] >= 0 && p[0] < shape[1] && p[1] >= 0 && p[1] < shape[0]);
+}
+byId("existing").addEventListener("change", async ({target}) => {
+  const run = generation;
+  try {
+    const [file] = target.files;
+    if (!file || file.size > 5 * 1024 * 1024) throw Error();
+    const data = JSON.parse(await file.text());
+    if (generation !== run) return;
+    if (data.schema !== "pasta-visible-mask-v1" || data.original_sha256 !== identity ||
+      JSON.stringify(data.image_shape) !== JSON.stringify(shape) ||
+      !Array.isArray(data.strokes) || data.strokes.length > 20000 || !data.strokes.every(valid)) throw Error();
+    strokes = data.strokes;
+    pending = active = null;
+    draw();
+    say("一致する原本の注釈を読み込みました。");
+  } catch {
+    if (generation === run) say("この原本に対応する有効な注釈JSONを選んでください。");
+  }
+});
+byId("save").addEventListener("click", () => {
+  if (pending) {
+    say("描画中の線または多角形を閉じてください。");
+    return;
+  }
+  const data = {schema:"pasta-visible-mask-v1", original_sha256:identity, image_shape:shape, strokes};
+  const blob = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type:"application/json"}));
+  const link = document.createElement("a");
+  link.href = blob;
+  link.download = identity+".annotation.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(blob), 1000);
+  say("注釈JSONをダウンロードしました。");
+});
+</script>
+</body>
+</html>

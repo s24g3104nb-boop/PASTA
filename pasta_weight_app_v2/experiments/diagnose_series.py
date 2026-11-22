@@ -21,7 +21,7 @@ from ..geometry_candidate import geometry,skeletonize
 
 def runtime_parameters():
     """Read literal UI defaults without importing Streamlit/training modules."""
-    path=Path(__file__).resolve().parents[1]/'developer_ui.py'
+    path=Path(__file__).resolve().parents[1]/'measurement_defaults.py'
     result={}
     for node in ast.parse(path.read_text(encoding='utf-8')).body:
         if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('DEFAULT_SPREAD','DEFAULT_BUNDLE'):
