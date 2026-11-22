@@ -34,15 +34,14 @@ for path,name,known_count in records:
     at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=30).run()
     at.button(key='home_upload').click().run()
     at.session_state['capture_photo']=BytesIO(path.read_bytes())
-    at.run()
-    assert at.selectbox(key='which_product').value==fixture['id']
     if research_lab:
         def lab_detector(rgb, **opts):
             return compare_spread_counts(rgb, **opts)[1]
         with patch.object(capture_ui,'detect_spread',lab_detector):
-            at.button(key='analyze_photo').click().run()
+            at.run()
     else:
-        at.button(key='analyze_photo').click().run()
+        at.run()
+    at.selectbox(key='which_product').set_value(fixture['id']).run()
     assert not at.exception,at.exception
     assert not any(m.label=='推定重量' for m in at.metric)
     cached=at.session_state['result_request']['_detection_result']

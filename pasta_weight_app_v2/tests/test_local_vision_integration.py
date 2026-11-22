@@ -164,6 +164,8 @@ fresh.text_input[0].set_value(os.environ["PASTA_ADMIN_PASSWORD"])
 fresh.button[0].click().run()
 assert not fresh.exception and fresh.button(key="home_demo") and root.exists()
 fresh.radio(key="main_nav").set_value("設定").run()
+assert any("A4撮影補助シート" in e.label for e in fresh.expander)
+assert fresh.get("download_button")
 fresh.selectbox(key="settings_section").set_value("開発・検証ツール").run()
 assert fresh.selectbox(key="developer_section")
 '''

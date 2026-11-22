@@ -7,8 +7,10 @@ from typing import Mapping, Sequence
 
 if __package__:
     from .operation_logs import NUTRITION, logged_operation
+    from .nutrition_state import STANDARD_NUTRITION_NOTE, standard_nutrition_used
 else:
     from operation_logs import NUTRITION, logged_operation
+    from nutrition_state import STANDARD_NUTRITION_NOTE, standard_nutrition_used
 
 
 NUTRIENT_KEYS = ('kcal', 'protein_g', 'fat_g', 'carb_g')
@@ -64,7 +66,8 @@ def dry_snapshot(record: Mapping) -> dict:
     if all(record.get(key) is not None for key in product_keys):
         nutrition = {key: nonnegative(record[source], f'乾麺の{source}') * weight / 100
                      for key, source in zip(NUTRIENT_KEYS, product_keys)}
-        nutrition_source = '計測時に保存した製品の100g栄養値'
+        nutrition_source = (STANDARD_NUTRITION_NOTE if standard_nutrition_used(record)
+                            else '計測時に保存した製品の100g栄養値')
     else:
         if any(record.get(key) is None for key in NUTRIENT_KEYS):
             raise ValueError('この乾麺は栄養未計算です。製品の栄養情報を登録した新しい測定記録を選ぶか、栄養未計算のまま食事日記に保存してください。')

@@ -7,7 +7,8 @@ import streamlit as st
 from pasta_vision import nutrition_for_weight
 from storage import DEFAULT_DB, save_measurement
 from measurement_diagnostics import trace
-from nutrition_state import has_nutrition, snapshot_for_nutrition
+from nutrition_state import (STANDARD_NUTRITION_NOTE, has_nutrition, snapshot_for_nutrition,
+                             standard_nutrition_used)
 
 
 def _submission_token(rgb, product, mode, weight, detected_count, estimator):
@@ -35,31 +36,10 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     token = _submission_token(rgb, product, mode, weight, detected_count, estimator)
     receipt = st.session_state.setdefault('measurement_saved_results', {}).get(token)
     draft = st.session_state.get('measurement_actual_drafts', {}).get(token, {})
-    nutrit = nutrition_for_weight(weight, product['kcal_100'],
-                                  product['protein_100'],
-                                  product['fat_100'], product['carb_100']) if has_nutrition(product, allow_demo=using_demo) else None
     st.subheader('あなたのパスタ')
     with st.container(key='weight_hero'):
         label = '入力した本数からの重量' if estimator == 'manual_count' else '推定重量'
         st.metric(label, f'{weight:.1f} g')
-    if nutrit is not None:
-        st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
-        with st.container(key='nutrition_cards'):
-            c1,c2,c3=st.columns(3)
-            c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
-            c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
-            c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
-    else:
-        st.info('栄養は未計算です。製品の栄養情報を登録すると計算できます。重量だけでも保存できます。')
-    st.caption(f'使用製品：{product["name"]}')
-    if nutrit is not None:
-        st.caption('推定重量から計算した乾麺分の栄養値です。ソース・具材は含みません。')
-    if st.session_state.get('_app_admin') and st.session_state.get('dev_tools_enabled'):
-        with st.expander('推定方式と計算の詳細'):
-            st.caption(f'使用方式: {estimator}')
-            st.caption(explanation)
-    st.caption('推定の信頼性: CGテスト用' if using_demo else
-               '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
     has_actual = st.checkbox('実測重量も記録する（任意）',
                              value=draft.get('known', False), disabled=bool(receipt),
                              key='actual_known', on_change=_remember_actual, args=(token,))
@@ -71,6 +51,29 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
                                  on_change=_remember_actual, args=(token,))
         if actual is not None:
             st.write(f'実測 {actual:.1f} g · 写真の推定との差 {abs(weight - actual):.1f} g')
+    nutrition_weight = actual if actual is not None else weight
+    nutrit = nutrition_for_weight(nutrition_weight, product['kcal_100'], product['protein_100'],
+                                  product['fat_100'], product['carb_100']) if has_nutrition(product, allow_demo=using_demo) else None
+    if nutrit is not None:
+        st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
+        with st.container(key='nutrition_cards'):
+            c1,c2,c3=st.columns(3)
+            c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
+            c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
+            c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
+    else:
+        st.info('栄養は未計算です。製品の栄養情報を登録すると計算できます。重量だけでも保存できます。')
+    st.caption(f'使用製品：{product["name"]}')
+    if nutrit is not None:
+        st.caption(f'{"実測重量" if actual is not None else "推定重量"}から計算した乾麺分です。')
+        if standard_nutrition_used(product):
+            st.caption(STANDARD_NUTRITION_NOTE)
+    if st.session_state.get('_app_admin') and st.session_state.get('dev_tools_enabled'):
+        with st.expander('推定方式と計算の詳細'):
+            st.caption(f'使用方式: {estimator}')
+            st.caption(explanation)
+    st.caption('推定の信頼性: CGテスト用' if using_demo else
+               '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
     if st.button('履歴に保存', type='primary', width='stretch',
                  key='measurement_save', disabled=bool(receipt) or (has_actual and actual is None)):
         try:

@@ -3,6 +3,7 @@ import streamlit as st
 from storage import list_products, save_product
 from ui_shell import resume_capture
 from operation_logs import RECORDS, WEIGHT, log_error, log_info
+from nutrition_state import STANDARD_DRY_PASTA
 
 
 def select_measurement_product(products, label, key, *, using_demo=False):
@@ -26,6 +27,19 @@ def select_measurement_product(products, label, key, *, using_demo=False):
     return products.get(ident)
 
 
+def select_optional_product(products, label, key, preferred):
+    if not products:
+        return STANDARD_DRY_PASTA
+    options = {None: STANDARD_DRY_PASTA, **products}
+    if key in st.session_state and st.session_state[key] not in options:
+        st.session_state.pop(key)
+    ident = st.selectbox(label, list(options), key=key,
+                         index=list(options).index(preferred) if preferred in options else 0,
+                         format_func=lambda value: options[value]['name'])
+    st.session_state['last_product_id'] = ident
+    return options[ident]
+
+
 def open_calibration(product=None):
     """Choose the product from the photo, or an empty form for a demo replacement."""
     ident = product['id'] if product else None
@@ -42,15 +56,15 @@ def _resume_after_calibration():
 
 
 def render_products():
+    admin = st.session_state.get('_app_admin', False)
     notice = st.session_state.pop('product_saved_notice', None)
     if notice:
         st.success(f'製品データを保存しました。{notice}' if isinstance(notice, str) else '製品データを保存しました。')
     if st.session_state.get('result_request') or st.session_state.get('capture_photo') is not None:
         st.button('測定画面に戻る', key='calibration_return', on_click=_resume_after_calibration)
     st.subheader('製品データの登録・更新')
-    st.write('1本あたりの重量は、**同じ製品・長さの乾麺を例えば50本数え、'
-             '電子はかりで測った総重量を50で割る**と求められます。'
-             '栄養値は商品パッケージの「乾麺100gあたり」を入力してください。')
+    st.caption('製品の登録は任意です。未登録でも写真の解析や実測重量の記録ができます。')
+    st.write('栄養値は商品パッケージの「乾麺100gあたり」を入力してください。')
     try:
         products_for_edit = list_products()
     except (OSError, sqlite3.Error):
@@ -59,8 +73,7 @@ def render_products():
         if st.button('製品情報を読み直す', key='editor_products_retry'):
             st.rerun()
         return
-    mapping = {p['id']: p for p in products_for_edit
-               if st.session_state.get('_app_admin') or not p['name'].startswith('デモ用')}
+    mapping = {p['id']: p for p in products_for_edit if admin or not p['name'].startswith('デモ用')}
     next_editor = st.session_state.pop('next_product_editor_id', None)
     if next_editor is not None:
         st.session_state['product_edit_mode'] = next_editor if next_editor in mapping else 0
@@ -75,19 +88,24 @@ def render_products():
         return
     previous = st.session_state.get('product_editor_displayed')
     st.session_state['product_editor_displayed'] = current
-    calibrate = st.checkbox('数えた本数と総重量から1本の重量を計算する', key=f'calibrate_from_units_{selected}')
+    calibrate = st.checkbox('まとめて量った乾麺の本数と重さを登録する（任意）',
+                            key=f'calibrate_from_units_{selected}')
     with st.form(f'product_editor_{selected}'):
         name = st.text_input('製品名', value=current.get('name', ''),
                              placeholder='例：〇〇スパゲッティ 1.6mm')
         if calibrate:
-            calib_n = st.number_input('校正で数えた本数', min_value=1, value=50, step=1)
-            calib_w = st.number_input('その本数の実測重量（g）', min_value=0.0, value=0.0, step=0.1)
+            st.caption('同じ製品の乾麺を数え、まとめて電子はかりで量ってください。')
+            calib_n = st.number_input('乾麺の本数', min_value=1, value=50, step=1)
+            calib_w = st.number_input('まとめて量った重さ（g）', min_value=0.0, value=0.0, step=0.1)
             g_per_strand = calib_w / calib_n
-            st.caption(f'1本あたりの重量：{g_per_strand:.4f} g')
-        else:
+            if admin:
+                st.caption(f'1本あたりの重量：{g_per_strand:.4f} g')
+        elif admin:
             g_per_strand = st.number_input('1本あたりの重量（g）', min_value=0.0,
                                            max_value=20.0, value=float(current.get('g_per_strand', 0.0)),
                                            step=0.001, format='%.4f')
+        else:
+            g_per_strand = current.get('g_per_strand', 0.0)
         kc = st.number_input('乾麺100gあたり kcal', min_value=0.0,
                              value=float(current.get('kcal_100', 0.0)), step=1.0)
         pr = st.number_input('乾麺100gあたり たんぱく質（g）', min_value=0.0,
@@ -114,6 +132,7 @@ def render_products():
                 if selected == original_id or origin == (st.session_state.get('capture_generation'), original_id):
                     # Only the product changes; keep the original photo and its counted regions.
                     request['product'] = saved
+                    st.session_state.pop('which_product', None)
                     request.pop('_logged_estimate_outcome', None)
                     notice = f'測定画面に戻ると「{saved["name"]}」の登録値で重さを確認できます。'
             st.session_state['product_saved_notice'] = notice

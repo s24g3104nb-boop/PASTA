@@ -13,7 +13,10 @@ from storage import get_product, list_products
 from measurement_ui import render_weight_result, render_regression_measurement
 from settings_ui import open_calibration, select_measurement_product
 from pasta_vision import image_quality_warnings
+from mask_geometry import mask_geometry
+from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
+from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -40,17 +43,19 @@ def render_capture():
     st.caption('無地で反射の少ない背景を使い、麺の両端が写るように余白を残してください。')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
     modes = ['広げた状態', '束の断面']
-    if st.session_state.get('_app_admin'):
+    admin = st.session_state.get('_app_admin', False)
+    mode = modes[0]
+    if admin:
         modes.append('束の側面・上面（回帰用）')
-    if st.session_state.get('capture_mode') not in modes:
-        st.session_state['capture_mode'] = st.session_state.get('capture_last_mode', '広げた状態')
-        if st.session_state['capture_mode'] not in modes:
-            st.session_state['capture_mode'] = '広げた状態'
-    mode=st.selectbox('乾麺の置き方', modes, key='capture_mode',
-        format_func=lambda x: {'広げた状態':'広げている','束の断面':'束の先端を写している','束の側面・上面（回帰用）':'束を横・上から写している（現在は未対応）'}[x],
-        help='写真に合った置き方を選んでください。',on_change=_remember_mode)
+        if st.session_state.get('capture_mode') not in modes:
+            st.session_state['capture_mode'] = st.session_state.get('capture_last_mode', modes[0])
+            if st.session_state['capture_mode'] not in modes:
+                st.session_state['capture_mode'] = modes[0]
+        mode=st.selectbox('乾麺の置き方', modes, key='capture_mode',
+            format_func=lambda x: {'広げた状態':'広げている','束の断面':'束の先端を写している','束の側面・上面（回帰用）':'束を横・上から写している（現在は未対応）'}[x],
+            help='写真に合った置き方を選んでください。',on_change=_remember_mode)
     photo = None
-    using_demo = source_kind.startswith('サンプル')
+    using_demo = admin and source_kind.startswith('サンプル')
     if using_demo and mode == '束の側面・上面（回帰用）':
         st.info('この状態のCGサンプルはありません。対応する実写真を使用してください。')
     elif using_demo:
@@ -87,6 +92,13 @@ def render_capture():
         st.button('写真を選び直す',key='decode_retake',on_click=start_capture,args=('写真をアップロード',),width='stretch')
         st.button('はかりで測った重さを記録する',key='decode_manual',on_click=start_manual_weight,width='stretch')
         return
+    if not admin:
+        st.session_state['result_request'] = dict(
+            rgb=preview, photo=photo, product=STANDARD_DRY_PASTA, mode=mode,
+            using_demo=False, using_regression=False, parameters=dict(DEFAULT_SPREAD),
+            raw_sha256=hashlib.sha256(photo.getvalue()).hexdigest() if hasattr(photo, 'getvalue') else None,
+        )
+        st.rerun()
     st.image(preview, caption='撮影した写真 · 向きは自動補正済み', width='stretch')
     st.caption('麺の全体が写っているか確認してください。撮影状態は手動で選択します。')
     st.subheader('写真の確認')
@@ -107,16 +119,10 @@ def render_capture():
     if product is None:
         st.info('使った製品を選ぶと、この写真を解析できます。')
         return
-    if st.session_state.get('_app_admin') and not using_demo and mode == '広げた状態' and hasattr(photo, 'getvalue'):
+    if not using_demo and mode == '広げた状態' and hasattr(photo, 'getvalue'):
         from area_ui import render_area_candidate
         if render_area_candidate(preview, product, photo.getvalue()):
             return
-    if not using_demo and not st.session_state.get('_app_admin'):
-        with st.expander('はかりで測った重さを記録する'):
-            from manual_weight_ui import render_manual_weight
-            if st.checkbox('実測入力を開く', key='capture_direct_manual'):
-                render_manual_weight(product, preview)
-                return
     if product['name'].startswith('デモ用'):
         st.warning('現在の製品データは**仮の数値**です。実際の重量・カロリーではありません。'
                    '設定の「製品・校正」で自分の製品を登録してください。')
@@ -125,8 +131,7 @@ def render_capture():
     if not using_demo and (product['name'].startswith('デモ用') or strand_calibration(product) is None):
         st.button('製品を登録・校正する', key='capture_calibration', on_click=open_calibration, args=(product,))
 
-    from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
-    developer = st.session_state.get('_app_admin') and st.session_state.get('dev_tools_enabled', False)
+    developer = st.session_state.get('dev_tools_enabled', False)
     method = st.session_state.get('research_method', 'OpenCV本数検出') if developer else 'OpenCV本数検出'
     using_regression = method.startswith('学習')
     active_model = None
@@ -227,15 +232,58 @@ def _log_estimate_outcome(request, outcome):
         request['_logged_estimate_outcome'] = outcome
 
 
+def _change_placement(request):
+    mode = st.session_state['result_capture_mode']
+    request['mode'] = mode
+    request['parameters'] = dict(DEFAULT_SPREAD if mode == '広げた状態' else DEFAULT_BUNDLE)
+    for key in ('_detection_result', '_geometry', '_logged_estimate_outcome'):
+        request.pop(key, None)
+
+
+def _optional_result_product(request):
+    try:
+        products = {p['id']: p for p in list_products() if not p['name'].startswith('デモ用')}
+    except (OSError, sqlite3.Error):
+        log_error(WEIGHT, '製品情報の読み込み 失敗')
+        st.warning('登録済みの製品を読み込めませんでした。写真は保持しています。一般的な乾麺として実測重量を入力できます。')
+        if st.button('製品情報を読み直す', key='result_product_retry'):
+            st.rerun()
+        return STANDARD_DRY_PASTA
+    if not products:
+        request['product'] = STANDARD_DRY_PASTA
+        return STANDARD_DRY_PASTA
+    preferred = (request['product']['id'] if request.get('product_initialized')
+                 else st.session_state.get('last_product_id'))
+    from settings_ui import select_optional_product
+    product = select_optional_product(products, '使った乾麺の製品（任意）', 'which_product', preferred)
+    previous = request['product']
+    if product != previous:
+        request['product'] = product
+        request.pop('_logged_estimate_outcome', None)
+        if request.get('product_initialized') and product['id'] == previous['id']:
+            # Refresh a changed calibration before accepting a pending save.
+            st.session_state['capture_product_refreshed'] = True
+            st.rerun()
+    request['product_initialized'] = True
+    return product
+
+
 def render_results(request):
     from manual_weight_ui import recovery
     rgb=request['rgb']; product=request['product']; mode=request['mode']
     using_demo=request['using_demo']; using_regression=request['using_regression']
-    st.button('写真・設定を変更',icon=':material/arrow_back:',on_click=edit_capture,key='edit_capture')
-    st.image(rgb,caption='解析した写真' + (' · CGサンプル' if using_demo else ''),width='stretch')
+    admin = st.session_state.get('_app_admin', False)
+    if admin:
+        st.button('写真・設定を変更',icon=':material/arrow_back:',on_click=edit_capture,key='edit_capture')
+    st.image(rgb,caption='乾麺の写真' + (' · CGサンプル' if using_demo else ''),width='stretch')
+    if not admin and 'saved_product' not in request:
+        with st.expander('束の先端を撮影した場合'):
+            st.selectbox('乾麺の置き方', ['広げた状態', '束の断面'],
+                         index=0 if mode == '広げた状態' else 1,
+                         key='result_capture_mode', on_change=_change_placement, args=(request,))
     if 'saved_product' in request:
         product = request['saved_product']
-    else:
+    elif admin:
         try:
             product = get_product(product['id'])
         except (OSError, sqlite3.Error):
@@ -256,12 +304,16 @@ def render_results(request):
     if st.session_state.pop('capture_product_refreshed', False):
         st.info('製品情報が更新されました。新しい校正値による結果を確認してください。')
     if not using_demo:
-        problems=image_quality_warnings(rgb)
+        if '_quality_warnings' not in request:
+            request['_quality_warnings'] = image_quality_warnings(rgb)
+        problems = request['_quality_warnings']
         if problems:
             _log_estimate_outcome(request, '画質を確認して重量推定を見送り')
             st.warning(' '.join(problems))
             if not using_regression:
                 _unfinished_count_diagnostic(product, '画像の明るさ・大きさ・ピントを確認してください。')
+            if not admin and 'saved_product' not in request:
+                product = _optional_result_product(request)
             recovery(product,rgb,synthetic=using_demo)
             return
     if using_regression:
@@ -289,16 +341,28 @@ def render_results(request):
                 if mode=='広げた状態':result=detect_spread(rgb,**request['parameters'])
                 elif mode=='束の断面':result=detect_bundle_ends(rgb,**request['parameters'])
                 else:raise ValueError('この撮影状態は現在の測定に対応していません。')
+                if not admin:
+                    request['_geometry'] = mask_geometry(result.mask)
+                    log_info(WEIGHT, '乾麺の画像解析 完了')
             # A request is replaced when its photo, placement or settings change.
             # Keep this private result in this session only, not a shared cache.
             request['_detection_result']=result
     except Exception:
         log_error(WEIGHT, '乾麺の本数検出 失敗')
-        st.error('本数の検出を完了できませんでした。再試行するか、写真・設定を変更してください。')
+        st.error('本数の検出を完了できませんでした。もう一度試すか、写真を選び直してください。')
         _unfinished_count_diagnostic(product, '本数の検出処理でエラーが発生しました。')
         if st.button('再試行する'):st.rerun()
+        if not admin and 'saved_product' not in request:
+            product = _optional_result_product(request)
         recovery(product,rgb,synthetic=using_demo)
         return
+    if not admin:
+        if '_geometry' not in request:  # A session may already hold the count result.
+            request['_geometry'] = mask_geometry(result.mask)
+        if request['_geometry']['mask_area_px']:
+            st.caption('乾麺候補の領域と形状を解析しました。')
+        if 'saved_product' not in request:
+            product = _optional_result_product(request)
     try:
         decision, manual = _count_diagnostic(result, product, mode, using_demo)
     except Exception:
@@ -313,7 +377,19 @@ def render_results(request):
             reasons=decision.reasons, weight_g=decision.weight_g, manual=manual, using_demo=using_demo)
     if decision.weight_g is None:
         _log_estimate_outcome(request, '検出結果・校正条件を確認して重量推定を見送り')
-        st.warning('重量を計算できません。' + ' '.join(decision.reasons))
+        if admin:
+            st.warning('重量を計算できません。' + ' '.join(decision.reasons))
+        else:
+            photo_reasons = [reason for code, reason in zip(decision.reason_codes, decision.reasons)
+                             if code != 'uncalibrated']
+            if photo_reasons:
+                st.warning('写真から重さを推定できませんでした。' + ' '.join(photo_reasons))
+            elif not decision.foreground_pixels:
+                st.warning('乾麺の領域を確認できませんでした。背景を変え、麺全体を真上から撮ってください。')
+            elif product['id'] is None:
+                st.info('この写真に適用できる確認済みの汎用重量推定モデルはありません。実測重量を入力して続けられます。')
+            else:
+                st.info('この製品は写真から重さを算出するための値が未設定です。実測重量を入力して続けられます。')
         recovery(product, rgb, synthetic=using_demo)
         return
 
@@ -331,7 +407,8 @@ def render_results(request):
                         raw_sha256=request.get('raw_sha256'), parameters=dict(
                             automatic_count=decision.automatic_count, used_count=decision.used_count,
                             foreground_pixels=decision.foreground_pixels, image_pixels=decision.image_pixels,
-                            detection=request['parameters']))
+                            detection=request['parameters'],
+                            **({'projected_geometry': request['_geometry']} if not admin else {})))
     render_weight_result(weight=decision.weight_g, product=product, rgb=rgb, mode=mode,
                          using_demo=using_demo, detected_count=decision.used_count, estimator=estimator,
                          diagnostics=diagnostics,

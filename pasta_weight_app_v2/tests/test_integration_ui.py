@@ -67,8 +67,100 @@ assert at.button(key='decode_retake')
 assert not at.metric
 at.button(key='decode_manual').click().run()
 assert not at.exception,at.exception
-assert at.button(key='manual_register_product')
+assert at.button(key='manual_weight_save')
+assert all(b.key != 'manual_register_product' for b in at.button)
 assert not any(m.label=='推定重量' for m in at.metric)
+''', tmp_path)
+
+
+def test_unregistered_upload_automatically_extracts_then_saves_standard_nutrition(tmp_path):
+    run_app_script(r'''
+import sys
+from io import BytesIO
+from streamlit.testing.v1 import AppTest
+from PIL import Image
+import numpy as np
+sys.path.insert(0,'pasta_weight_app_v2')
+import capture_ui
+from storage import list_measurements, list_products
+from meal_diary import entries
+from cooking import dry_snapshot
+
+at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=20).run()
+old_products=list_products()
+at.button(key='home_upload').click().run()
+image=np.full((480,640,3),42,np.uint8)
+for i in range(6):
+    image[90+i*40:94+i*40,100:530]=(220,180,40)
+photo=BytesIO()
+Image.fromarray(image).save(photo,'PNG')
+at.session_state['capture_photo']=photo
+at.run()
+assert not at.exception
+request=at.session_state['result_request']
+assert request['_detection_result'].count==6
+geometry=request['_geometry']
+assert geometry['mask_area_px']>0 and geometry['quantile_length_px']>0 and geometry['width_over_length']>0
+assert request['product']['id'] is None
+assert any('確認済みの汎用重量推定モデルはありません' in i.value for i in at.info)
+assert not at.error and not any(m.label=='推定重量' for m in at.metric)
+assert not any('製品を登録' in b.label or b.key=='analyze_photo' for b in at.button)
+
+def must_not_repeat(*args, **kwargs):
+    raise AssertionError('画像を再解析しました')
+capture_ui.detect_spread=must_not_repeat
+next(w for w in at.number_input if w.label=='はかりで測った実測重量（g）').set_value(100.).run()
+assert any(m.value=='371.0 kcal' for m in at.metric)
+assert any('一般的な乾麺の概算' in c.value for c in at.caption)
+at.button(key='manual_weight_save').click().run()
+assert not at.error and at.button(key='manual_weight_save').disabled
+row, = list_measurements()
+assert row['estimated_g'] is None and row['actual_g']==100 and row['g_per_strand'] is None
+assert row['estimator']=='manual_weight' and row['kcal']==371 and row['carb_g']==74.7
+assert row['carb_100']==74.67
+assert list_products()==old_products
+assert '一般的な乾麺の概算' in dry_snapshot(row)['nutrition_source']
+
+at.button(key='manual_weight_to_diary').click().run()
+next(w for w in at.text_input if w.label=='料理名').set_value('乾麺100gの記録').run()
+at.button(key='meal_save').click().run()
+meal, = entries()
+assert meal['measurement_id']==row['id'] and meal['nutrition_snapshot']['kcal']==371
+assert '一般的な乾麺の概算' in meal['nutrition_source']
+at.button(key='meal_detail_back').click().run()
+at.radio(key='diary_view').set_value('カレンダー').run()
+assert at.button(key='diary_add_selected_day') and not at.exception
+''', tmp_path)
+
+
+def test_no_foreground_and_read_failure_are_distinct_from_missing_generic_model(tmp_path):
+    run_app_script(r'''
+import sys
+from io import BytesIO
+from streamlit.testing.v1 import AppTest
+from PIL import Image, ImageDraw
+sys.path.insert(0,'pasta_weight_app_v2')
+import capture_ui
+from sqlite3 import OperationalError
+at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=20).run()
+at.button(key='home_upload').click().run()
+image=Image.new('RGB',(680,470),(42,42,42))
+for x in range(0,680,40):
+    ImageDraw.Draw(image).line((x,0,x,469),fill=(65,65,65))
+photo=BytesIO()
+image.save(photo,'PNG')
+at.session_state['capture_photo']=photo
+def read_products():
+    raise OperationalError('fixture')
+capture_ui.list_products=read_products
+at.run()
+assert not at.exception and not at.error
+assert at.session_state['result_request']['_geometry']['mask_area_px']==0
+assert any('本数を検出できません' in w.value for w in at.warning)
+assert any('登録済みの製品を読み込めませんでした' in w.value for w in at.warning)
+assert not any('汎用重量推定モデル' in i.value for i in at.info)
+assert not any(m.label=='推定重量' for m in at.metric)
+assert at.button(key='manual_weight_save') and at.button(key='recovery_retake')
 ''', tmp_path)
 
 

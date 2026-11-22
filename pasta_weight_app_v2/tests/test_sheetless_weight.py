@@ -94,12 +94,13 @@ assert not at.exception
 from storage import save_product
 save_product('試料の製品', .68, 350, 12, 2, 70)
 at.button(key='home_upload').click().run()
+assert any(c.value=='乾麺をできるだけ平らに広げ、重なりを減らして真上から撮影してください。' for c in at.caption)
 photo = BytesIO()
 Image.new('RGB',(500,450),(196,164,55)).save(photo, format='PNG')
 at.session_state['capture_photo'] = photo
 at.run()
-assert not at.exception and at.button(key='analyze_photo')
-assert any(c.value=='乾麺をできるだけ平らに広げ、重なりを減らして真上から撮影してください。' for c in at.caption)
+assert not at.exception and at.button(key='manual_weight_save')
+assert all(b.key!='analyze_photo' for b in at.button)
 assert not any('A4' in e.label for e in at.expander)
 assert not at.get('download_button')
 assert 'area_ui' not in sys.modules

@@ -105,27 +105,33 @@ def navigate(page, name):
     page.locator('.st-key-main_nav label').filter(has_text=name).click()
 
 
-def open_capture(page, url, work, filename, product):
+def open_capture(page, url, work, filename, product, baseline):
     page.goto(url)
-    page.get_by_text('写真を選ぶ・はかりの数値を記録する', exact=True).click()
-    button(page, 'home_upload').click()
+    button(page, 'home_camera').click()
     page.locator('input[type=file]').set_input_files(work / filename)
-    choose(page, 'which_product', product)
-    button(page, 'analyze_photo').click()
+    if baseline:
+        choose(page, 'which_product', product)
+        button(page, 'analyze_photo').click()
+    else:
+        expect(button(page, 'manual_weight_save')).to_be_visible()
+        expect(button(page, 'analyze_photo')).to_have_count(0)
+        if product != DEMO:
+            choose(page, 'which_product', product)
 
 
-def read_result(page):
+def read_result(page, expected):
     hero = page.locator('.st-key-weight_hero')
-    hero.or_(button(page, 'manual_weight_save')).first.wait_for()
-    if hero.count():
-        return hero.get_by_test_id('stMetricValue').inner_text().strip()
+    if expected is not None:
+        value = hero.get_by_test_id('stMetricValue')
+        expect(value).to_have_text(expected)
+        return value.inner_text().strip()
+    expect(button(page, 'manual_weight_save')).to_be_visible()
+    expect(hero).to_have_count(0)
     return None
 
 
-def show_diagnostics(page, require):
+def show_diagnostics(page):
     label = page.get_by_text('写真と重量の診断', exact=True)
-    if require:
-        expect(label).to_be_visible()
     if label.count():
         label.click()
         return label.locator('xpath=ancestor::details[1]').inner_text()
@@ -135,12 +141,20 @@ def show_diagnostics(page, require):
 def fill_product(page, name, grams, *, new=False):
     choose(page, 'product_edit_mode', '＋ 新しい製品を登録' if new else name)
     editor = page.get_by_test_id('stForm')
-    if new:
-        editor.get_by_role('textbox', name='製品名', exact=True).fill(name)
+    product_name = editor.get_by_role('textbox', name='製品名', exact=True)
+    expect(product_name).to_have_value('' if new else name)
+    group_weight = page.get_by_text('まとめて量った乾麺の本数と重さを登録する（任意）', exact=True)
+    if group_weight.count():
+        group_weight.click()
+        weight = editor.get_by_role('spinbutton', name='まとめて量った重さ（g）', exact=True)
+        entered_weight = round(grams * 50, 4)
     else:
-        expect(editor.get_by_role('textbox', name='製品名', exact=True)).to_have_value(name)
-    weight = editor.get_by_role('spinbutton', name='1本あたりの重量（g）', exact=True)
-    weight.fill(str(grams))
+        weight = editor.get_by_role('spinbutton', name='1本あたりの重量（g）', exact=True)
+        entered_weight = grams
+    expect(weight).to_be_visible()
+    if new:
+        product_name.fill(name)
+    weight.fill(str(entered_weight))
     weight.press('Tab')
     editor.get_by_role('button', name='製品データを保存', exact=True).click()
     page.get_by_text(re.compile('製品データを保存しました')).wait_for()
@@ -165,14 +179,20 @@ def run_checks(browser, url, work, output, baseline):
         page.set_default_timeout(10000)
         check = dict(case=case, viewport=[width, height], expected=expected)
         try:
-            open_capture(page, url, work, file, product)
-            observed = read_result(page)
+            open_capture(page, url, work, file, product, baseline)
+            observed = read_result(page, '8.2 g' if case == 'recalibrate' else None if case == 'new_product' else expected)
             if case == 'new_product':
                 assert observed is None, 'real upload with demo product yielded a weight'
-                button(page, 'recovery_calibration').click()
+                if baseline:
+                    button(page, 'recovery_calibration').click()
+                else:
+                    navigate(page, '設定')
+                    choose(page, 'settings_section', '製品・校正')
                 fill_product(page, NEW, .68, new=True)
                 button(page, 'calibration_return').click()
-                observed = read_result(page)
+                if not baseline:
+                    choose(page, 'which_product', NEW)
+                observed = read_result(page, expected)
             elif case == 'recalibrate':
                 assert observed == '8.2 g'
                 editor = browser.new_page(viewport=dict(width=1280, height=900))
@@ -186,14 +206,17 @@ def run_checks(browser, url, work, output, baseline):
                 navigate(page, '記録')
                 navigate(page, 'ホーム')
                 button(page, 'home_resume_capture').click()
-                observed = read_result(page)
+                observed = read_result(page, expected)
             check['observed'] = observed
             check['messages'] = page.get_by_test_id('stAlert').all_inner_texts()
-            diagnostic = show_diagnostics(page, require=not baseline)
+            diagnostic = show_diagnostics(page) if baseline else None
+            if not baseline:
+                expect(page.get_by_text('写真と重量の診断', exact=True)).to_have_count(0)
+                expect(button(page, 'recovery_calibration')).to_have_count(0)
             if diagnostic:
                 check['diagnosis'] = diagnostic
             target = page.get_by_text('写真と重量の診断', exact=True) if diagnostic else (
-                page.locator('.st-key-weight_hero') if observed else page.get_by_test_id('stAlert').first)
+                page.locator('.st-key-weight_hero') if observed else button(page, 'manual_weight_save'))
             target.scroll_into_view_if_needed()
             page.wait_for_timeout(400)
             page.screenshot(path=output / (case + '.png'))

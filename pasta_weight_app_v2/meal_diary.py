@@ -6,6 +6,7 @@ import sqlite3
 from storage import DEFAULT_DB
 from data_backup import backup_database
 from meal_photos import prepare_photo, persist_photo, photo_path as _photo_path
+from nutrition_state import STANDARD_NUTRITION_NOTE, standard_nutrition_used
 from operation_logs import RECORDS, logged_operation
 
 ADDITIONS = {'meal_type': "TEXT NOT NULL DEFAULT ''", 'measurement_id': 'INTEGER',
@@ -81,6 +82,8 @@ def _sources(c,measurement_id,cooking_session_id):
             weight=snapshot['actual_g'] if snapshot['actual_g'] is not None else snapshot['estimated_g']
             nutrition={out:weight*snapshot[key]/100 for out,key in [('kcal','kcal_100'),('protein_g','protein_100'),('fat_g','fat_100'),('carb_g','carb_100')]}
             status='dry_only';source='乾麺の実測重量' if snapshot['actual_g'] is not None else '乾麺の推定重量'
+        if source is not None and standard_nutrition_used(snapshot):
+            source += ' · ' + STANDARD_NUTRITION_NOTE
     return measurement_id,snapshot,status,source,nutrition
 
 

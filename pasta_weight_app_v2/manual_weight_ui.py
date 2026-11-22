@@ -5,8 +5,9 @@ from uuid import uuid4
 import streamlit as st
 from storage import save_measurement,DEFAULT_DB,list_products
 from pasta_vision import nutrition_for_weight
-from nutrition_state import has_nutrition, snapshot_for_nutrition
-from settings_ui import open_calibration, select_measurement_product
+from nutrition_state import (STANDARD_DRY_PASTA, STANDARD_NUTRITION_NOTE,
+                             has_nutrition, snapshot_for_nutrition, standard_nutrition_used)
+from settings_ui import open_calibration, select_measurement_product, select_optional_product
 from measurement_diagnostics import strand_calibration
 
 
@@ -19,7 +20,7 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
     key='manual_weight_'+draft['token']
     if key not in st.session_state:st.session_state[key]=draft['weight']
     st.subheader('実際の重さを入力する')
-    st.caption('電子はかりの表示を入力してください。画像の推定値ではありません。製品の1本重量の校正は不要です。')
+    st.caption('電子はかりの表示を入力してください。')
     value=st.number_input('はかりで測った実測重量（g）',min_value=0.,step=.1,key=key,disabled=bool(draft['saved']))
     draft['weight']=value
     known=has_nutrition(product)
@@ -27,6 +28,8 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
     if nutrition:
         st.metric('実測重量から計算した乾麺分',f'{nutrition["kcal"]:.1f} kcal')
         st.write(f"たんぱく質 {nutrition['protein_g']:.1f} g / 脂質 {nutrition['fat_g']:.1f} g / 炭水化物 {nutrition['carb_g']:.1f} g")
+        if standard_nutrition_used(product):
+            st.caption(STANDARD_NUTRITION_NOTE)
     else:st.info('栄養は未計算です。実製品の栄養情報を登録すると計算できます。')
     if synthetic:st.warning('CG写真を使用した操作確認です。実写の記録ではありません。')
     if st.button('実測重量を履歴に保存',type='primary',width='stretch',key='manual_weight_save',disabled=bool(draft['saved'])):
@@ -38,7 +41,8 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
                 estimator='manual_weight',product_snapshot=snapshot,submission_token=draft['token'],db_path=db_path)
             draft['saved_product'] = dict(product)
             request = st.session_state.get('result_request')
-            if request and rgb is request['rgb'] and product['id'] == request['product']['id']:
+            if request and rgb is request['rgb']:
+                request['product'] = product
                 request['saved_product'] = dict(product)
             st.rerun()
         except ValueError as exc:st.error(str(exc))
@@ -52,8 +56,8 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
 
 
 def recovery(product,rgb,*,synthetic=False):
-    st.caption('重量の推定はできませんでした。次の操作を選んでください。')
-    if (product['name'].startswith('デモ用') or strand_calibration(product) is None):
+    if st.session_state.get('_app_admin') and (
+            product['name'].startswith('デモ用') or strand_calibration(product) is None):
         st.button('校正設定へ',key='recovery_calibration',width='stretch',
                   on_click=open_calibration, args=(product,))
     from ui_shell import start_capture
@@ -63,11 +67,18 @@ def recovery(product,rgb,*,synthetic=False):
 
 def render_without_photo():
     st.button('ホームに戻る',on_click=lambda:st.session_state.pop('manual_only',None))
-    products = {p['id']: p for p in list_products()
-                if st.session_state.get('_app_admin') or not p['name'].startswith('デモ用')}
-    product = select_measurement_product(products, '使用した製品', 'manual_only_product')
-    if product is not None:
-        render_manual_weight(product)
+    admin = st.session_state.get('_app_admin', False)
+    try:
+        products = {p['id']: p for p in list_products() if admin or not p['name'].startswith('デモ用')}
+    except (OSError, sqlite3.Error):
+        st.warning('登録済みの製品を読み込めませんでした。一般的な乾麺として記録できます。')
+        product = STANDARD_DRY_PASTA
     else:
-        st.info('はかりで測った乾麺の製品を選んでください。')
-        st.button('製品を登録する', on_click=open_calibration, key='manual_register_product')
+        if admin:
+            product = select_measurement_product(products, '使用した製品', 'manual_only_product')
+            if product is None:
+                return
+        else:
+            product = select_optional_product(products, '使った乾麺の製品（任意）', 'manual_only_product',
+                                              st.session_state.get('last_product_id'))
+    render_manual_weight(product)
