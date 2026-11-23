@@ -5,6 +5,7 @@ import streamlit as st
 from ..pasta_vision import image_to_rgb
 from .area_proportion import (DESCRIPTIONS, EVALUATED_MAX_G, FEATURES, PRIMARY, analyze, calibrate,
                               overlay, predict, yellow_masks)
+from .practical_capture import WidthReference
 from .strand_scale import (AGREED, COLOR_EDGE, MAX_SIDE, NATIVE_MASK, calibrate_widths,
                            canonical_width, choose_estimator, measure_for_area, visible_density,
                            width_outcomes)
@@ -73,6 +74,10 @@ def _show_scale(evidence, scale, reference, previous_model):
     st.caption(f'解析時の長辺 {scale.long_side_px}px（上限{MAX_SIDE}px）、'
                f'照合時の長辺 {scale.check_long_side_px}px。幅は長辺960px相当で表示します。')
     outcomes = width_outcomes(evidence, scale, reference)
+    if COLOR_EDGE in reference and AGREED in reference:
+        profile = WidthReference(reference[COLOR_EDGE], reference[AGREED])
+        st.download_button('撮影試験用の参照係数をダウンロード', profile.to_json(),
+                           file_name='pasta_width_reference.json', mime='application/json', on_click='ignore')
     for method, title in _WIDTH_LABELS.items():
         st.markdown(f'**{title}**')
         width = canonical_width(scale, method)

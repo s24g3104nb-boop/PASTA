@@ -144,6 +144,7 @@ assert normal.selectbox(key="appearance")
 assert not any(w.key in {"settings_section","product_edit_mode","cooking_section"} for w in normal.selectbox)
 assert "developer_ui" not in sys.modules and "training_manager" not in sys.modules
 assert "pasta_weight_app_v2.experiments.area_proportion_ui" not in sys.modules
+assert "pasta_weight_app_v2.experiments.practical_capture_ui" not in sys.modules
 config.set_option("server.address","0.0.0.0")
 denied=AppTest.from_file(app/"admin_app.py").run()
 assert denied.error and not denied.text_input and not root.exists()
@@ -177,6 +178,15 @@ fresh.selectbox(key="developer_section").set_value("20g基準の面積換算").r
 assert not fresh.exception and len(fresh.get('file_uploader')) == 2
 next(b for b in fresh.button if b.label == '面積と重量を比較する').click().run()
 assert any('基準写真を3枚' in msg.value for msg in fresh.info)
+fresh.selectbox(key='developer_section').set_value('概算重量の撮影試験').run()
+assert not fresh.exception and len(fresh.get('file_uploader')) == 1
+assert any('写真1枚' in msg.value for msg in fresh.info)
+from pasta_weight_app_v2.experiments.practical_capture import WidthReference
+fresh.session_state['practical_width_profile'] = WidthReference(2000., 2100.)
+fresh.run()
+assert not fresh.exception and len(fresh.get('file_uploader')) == 2
+fresh.radio(key='practical_photo_source').set_value('カメラで撮影する').run()
+assert not fresh.exception and len(fresh.get('camera_input')) == 1
 '''
     result = subprocess.run([sys.executable,'-c',script], cwd=APP.parent, capture_output=True, text=True,
                             env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'public'),

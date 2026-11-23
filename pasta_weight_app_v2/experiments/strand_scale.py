@@ -156,13 +156,10 @@ def choose_estimator(evidence, scale, outcomes, legacy_reference):
     """Use one geometrically supported result, retaining the thickness veto."""
     if evidence.width_capture_reason:
         return dict(method=None, estimated_g=None, reason=evidence.width_capture_reason)
-    width = scale.widths[AGREED]
     density = visible_density(evidence, scale)
     # A widespread connected interior can bias the local width. A stable
     # long track is a separate option for usable captures, without averaging.
-    width_reliable = (density is not None and density <= 2/3 and width.spread_px is not None
-                      and width.spread_px <= .25*width.width_px)
-    if width_reliable and outcomes[AGREED]['estimated_g'] is not None:
+    if reliable_width(scale, density) and outcomes[AGREED]['estimated_g'] is not None:
         return dict(method=AGREED, estimated_g=outcomes[AGREED]['estimated_g'], reason='')
     track = predict(legacy_reference, evidence, PRIMARY)
     if (track['estimated_g'] is not None and evidence.track_px > 0
@@ -171,6 +168,12 @@ def choose_estimator(evidence, scale, outcomes, legacy_reference):
     if evidence.legacy_weight_g is not None:
         return dict(method='legacy', estimated_g=evidence.legacy_weight_g, reason='')
     return dict(method=None, estimated_g=None, reason='麺幅または長い線の測定が安定しません。')
+
+
+def reliable_width(scale, density):
+    width = scale.widths[AGREED]
+    return (density is not None and density <= 2/3 and width.width_px is not None
+            and width.spread_px is not None and width.spread_px <= .25*width.width_px)
 
 
 def thickness_diagnostic(evidence, outcomes):
