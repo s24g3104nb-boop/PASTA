@@ -20,6 +20,7 @@ SEGMENTATION = 'opencv_hsv_lab_spread_960'
 AREA_FEATURES = ('image_fraction', 'pasta_or_dark_fraction', 'area_over_length_squared')
 MODEL_PATH = Path(__file__).with_name(f'{ESTIMATOR}.json')
 MIN_LONG_SIDE = 640
+THICK_CAPTURE_REASON = '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
 # Small rasterization changes near a calibration endpoint should not cause
 # abrupt rejection. This allowance is for capture variation, not new weights.
 AREA_BOUNDARY_TOLERANCE_G = 2.0
@@ -131,7 +132,7 @@ def mask_capture_reason(mask, length, *, dark_fraction=None):
         return '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
     thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
     if np.quantile(thickness[mask], .75) > .018 * length or fraction > .73:
-        return '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
+        return THICK_CAPTURE_REASON
     return ''
 
 

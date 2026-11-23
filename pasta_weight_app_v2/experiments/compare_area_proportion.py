@@ -27,7 +27,7 @@ METHODS = ('legacy', *FEATURES)
 STRESS_SCALES = {'smaller_in_frame_75': .75, 'smaller_in_frame_60': .60, 'half_resolution': .50}
 
 
-def load_originals(root):
+def load_originals(root, *, max_side=1400):
     """Check filenames, hashes, JPEG dimensions, and per-weight group metadata."""
     document = json.loads((root / 'manifest.json').read_text(encoding='utf-8-sig'))
     items = document['items']
@@ -62,7 +62,7 @@ def load_originals(root):
                 raise ValueError(f'Original JPEG dimensions differ from the manifest: {name}')
         paths.add(name)
         digests.add(digest)
-        yield item, image_to_rgb(BytesIO(content))
+        yield item, image_to_rgb(BytesIO(content), max_side=max_side)
 
 
 def _metrics(rows, method, field):
@@ -95,17 +95,23 @@ def _outcomes(model, evidence):
     }
 
 
-def _scale_stress(rgb, original, model):
+def scaled_photo(rgb, name):
     height, width = rgb.shape[:2]
+    scale = STRESS_SCALES[name]
+    smaller = cv2.resize(rgb, (max(1, round(width*scale)), max(1, round(height*scale))),
+                         interpolation=cv2.INTER_AREA)
+    if name == 'half_resolution':
+        return smaller
+    resized_h, resized_w = smaller.shape[:2]
+    top, left = (height - resized_h)//2, (width - resized_w)//2
+    return cv2.copyMakeBorder(smaller, top, height - resized_h - top,
+                              left, width - resized_w - left, cv2.BORDER_CONSTANT, value=(128, 128, 128))
+
+
+def _scale_stress(rgb, original, model):
     results = {}
-    for name, scale in STRESS_SCALES.items():
-        smaller = cv2.resize(rgb, (round(width*scale), round(height*scale)), interpolation=cv2.INTER_AREA)
-        if name != 'half_resolution':
-            resized_h, resized_w = smaller.shape[:2]
-            top, left = (height - resized_h)//2, (width - resized_w)//2
-            smaller = cv2.copyMakeBorder(smaller, top, height - resized_h - top,
-                                         left, width - resized_w - left, cv2.BORDER_CONSTANT,
-                                         value=(128, 128, 128))
+    for name in STRESS_SCALES:
+        smaller = scaled_photo(rgb, name)
         derived = analyze(smaller)
         outcomes = _outcomes(model, derived)
         for key, outcome in outcomes.items():

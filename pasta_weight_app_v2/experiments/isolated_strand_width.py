@@ -56,12 +56,18 @@ def _normal_profiles(mask, x, y, nx, ny):
 
 def isolated_strand_width(mask, centerline):
     """Use both visible edges of locally separated segments, then pool by tile."""
+    xs, ys, _, _, widths = separated_sections(mask, centerline)
+    return summarize_sections(xs, ys, widths, mask.shape)
+
+
+def separated_sections(mask, centerline):
+    """The centers, normal directions and binary widths of stable cross-sections."""
     neighbors = cv2.filter2D(centerline, -1, np.ones((3, 3), np.uint8)) - centerline
     junctions = ((centerline != 0) & (neighbors > 2)).astype(np.uint8)
     near_junction = cv2.dilate(junctions, np.ones((9, 9), np.uint8)) != 0
     ys, xs = np.nonzero((centerline != 0) & (neighbors == 2) & ~near_junction)
     if not len(xs):
-        return WidthMeasurement()
+        return xs, ys, np.empty(0), np.empty(0), np.empty(0)
     # The gradient tensor estimates a normal from nearby parallel edges.
     binary = (mask != 0).astype(np.float32)
     gx = cv2.Sobel(binary, cv2.CV_32F, 1, 0, ksize=3)
@@ -75,22 +81,26 @@ def isolated_strand_width(mask, centerline):
     positions = np.flatnonzero(direction & inside)
     positions = positions[::max(4, (len(positions) + 5999)//6000)]
     if not len(positions):
-        return WidthMeasurement()
+        return xs[:0], ys[:0], np.empty(0), np.empty(0), np.empty(0)
     angle = .5 * np.arctan2(2*xy[positions], xx[positions] - yy[positions])
     xs, ys = xs[positions], ys[positions]
-    profiles = _normal_profiles(binary, xs, ys, np.cos(angle), np.sin(angle))
+    nx, ny = np.cos(angle), np.sin(angle)
+    profiles = _normal_profiles(binary, xs, ys, nx, ny)
     widths = np.median(profiles, axis=1)
     stable = np.ptp(profiles, axis=1) <= np.maximum(.85, .20*widths)
-    if not stable.any():
+    return xs[stable], ys[stable], nx[stable], ny[stable], widths[stable]
+
+
+def summarize_sections(xs, ys, widths, shape):
+    if not len(widths):
         return WidthMeasurement()
-    widths, xs, ys = widths[stable], xs[stable], ys[stable]
     # Side-by-side strands sharing both outside edges can still pass the local
     # checks. Use the repeatedly observed narrow class instead of the widest
     # sections, without weighting by how many samples a long region supplies.
     narrow = np.quantile(widths, .25)
     close = (widths >= .80*narrow) & (widths <= 1.25*narrow)
     widths, xs, ys = widths[close], xs[close], ys[close]
-    tile_index = ys//_TILE * (mask.shape[1]//_TILE + 1) + xs//_TILE
+    tile_index = ys//_TILE * (shape[1]//_TILE + 1) + xs//_TILE
     tiles = np.unique(tile_index)
     if len(tiles) < 3 or len(widths) < 8:
         return WidthMeasurement(sections=len(widths), tiles=len(tiles))
