@@ -94,3 +94,34 @@ def test_emit_validated_head_with_no_private_metadata(tmp_path, monkeypatch):
     artifact.write_text(json.dumps({**head.artifact(train.CHECKPOINT_SHA256), 'weights': {}}))
     with pytest.raises(ValueError, match='Invalid dish classifier coefficients'):
         LinearDishHead.load(artifact, train.CHECKPOINT_SHA256)
+
+
+def test_inferred_run_only_passes_training_groups_to_visual_adaptation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from pasta_weight_app_v2.experiments import fine_tune_finished_dish as fine_tune
+
+    manifest, rows, write = dataset(tmp_path)
+    for row in rows:
+        row['group_status'] = 'inferred'
+    write()
+    head = LinearDishHead(np.eye(3, EMBEDDING_SIZE), np.zeros(3))
+    saved = []
+
+    class Encoder:
+        torch = SimpleNamespace(save=lambda state, _: saved.append(state))
+
+        def image_evidence(self, rgb):
+            return np.zeros(EMBEDDING_SIZE), Suggestion(None, (), None, 'test')
+
+    def train_block(encoder, seed, examples):
+        assert seed is head and {item.split for item in examples} == {'train'}
+        return head, {'block': 'fake'}
+
+    monkeypatch.setattr(train, 'LocalDishClassifier', lambda *args: Encoder())
+    monkeypatch.setattr(train, 'fit_head', lambda *args: head)
+    monkeypatch.setattr(fine_tune, 'adapt_visual_block', train_block)
+    monkeypatch.setattr(fine_tune, 'adapted_predictions', lambda *args: list(args[-1]))
+    result = train.run(manifest, tmp_path, 'mock', tmp_path/'out', fine_tune=True)
+    assert result['protocol']['group_status'] == 'inferred'
+    assert result['test']['fine_tuned_block']['abstention_rate'] == 1
+    assert len(saved) == 1 and saved[0]['last_visual_block'] == {'block': 'fake'}

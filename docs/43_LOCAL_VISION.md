@@ -67,6 +67,26 @@ OpenCLIPの画像エンコーダーは固定し、調理回ごとに集約した
 
 評価を確認してから端末上で比較する場合に限り、`PASTA_DISH_HEAD_PATH` に出力先の `head.json` を指定して起動します。この設定がない場合は、OpenCLIP重みがあれば従来のゼロショット候補を使い、重みもなければ手動選択を使います。写真、台帳、学習結果は非公開フォルダーで管理してください。
 
+### 受領台帳の照合と追加学習の比較
+
+従来のCSVに加え、分割ZIPの `labels.csv` と `split_manifest.csv` を同じ非公開フォルダーに展開した場合は、以下の手順で照合できます。変換済み画像のハッシュ・サイズ・デコード結果を確認し、未変換画像は元画像ハッシュにも照合します。HEIC原本は変換済みJPEGから照合できないため、未照合枚数を別に記録します。
+
+目視レビューCSVは `file,group,split,group_status` を含めます。`file` は台帳にある `images/…` のパスです。同一の皿・連写・転載や切り抜きの疑いがある組は同じ群に入れます。目視や画像類似度で推定した群は `inferred` を指定します。分割内に3クラスが必要で、明らかな類似群が残る場合は分割を修正してから学習を始めます。画像から群を推定した結果は探索的評価として扱います。照合で生成する分割CSVにも確度を引き継ぎます。
+
+```powershell
+.\.venv\Scripts\python.exe -m pasta_weight_app_v2.experiments.audit_finished_dish `
+  --dataset C:\PastaPrivate\bundle --review C:\PastaPrivate\visual_review.csv `
+  --output C:\PastaPrivate\verified
+.\.venv\Scripts\python.exe -m pasta_weight_app_v2.experiments.train_finished_dish `
+  --manifest C:\PastaPrivate\verified\split.csv --photos C:\PastaPrivate\bundle `
+  --checkpoint $env:PASTA_OPENCLIP_CHECKPOINT --output C:\PastaPrivate\comparison-01 `
+  --group-status inferred --fine-tune
+```
+
+`--fine-tune` は画像エンコーダーの最終Transformerブロックと3クラスの分類層を、学習用の写真だけで固定5エポック調整します。同じ群やクラスの写真数だけで学習が偏らないよう、クラスと群ごとの寄与を揃えます。学習後は同じデータ分割で、従来のゼロショット、固定特徴＋分類層、最終ブロック調整の3方式を比較します。学習方式の候補表示には既存のゼロショット見送り判定も適用します。
+
+`metrics.json` の `protocol.group_status` は評価の来歴、`predictions.csv` は写真ごとの予測です。変換前原本、写真、台帳、予測、調整した重みは非公開で保管します。アプリ本体は `fine_tuned_block.pt` を自動で読み込みません。台帳の正解率が高い場合も、調理回・転載元を確認した別の写真と対象外料理で評価するまで、自動判別の適用範囲は確認できません。
+
 ## 管理者向けのA4計測・校正
 
 MobileSAMはHSV＋Labの候補から作った枠を使って可視領域を抽出します。960pxの入力を使い、4つの基準マーカーから射影変換で紙面座標へ移します。定規で100mmの印刷線を確認し、紙面に一層で置いた場合に、投影面積・長さ・幅が求まります。反射、はみ出し、マーカーの欠落、層が重なった配置は撮り直す条件です。管理者はマスクを見比べ、背景の混入や麺の欠けを確認してから、投影面積を校正に使います。

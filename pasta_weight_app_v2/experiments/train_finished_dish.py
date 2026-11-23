@@ -25,6 +25,7 @@ class Example:
     label: str
     session_id: str
     split: str
+    group_status: str = 'confirmed'
 
 
 def read_splits(manifest, photos):
@@ -42,6 +43,9 @@ def read_splits(manifest, photos):
                                                    ('file', 'label', 'session_id', 'split', 'sha256'))
             if not session or split not in sets or label not in (*STANDARD_DISH_NAMES, OUT_OF_SCOPE):
                 raise ValueError(f'台帳 {line} 行目の料理・調理回・分割を確認してください。')
+            status = row.get('group_status', 'confirmed')
+            if status not in ('confirmed', 'inferred'):
+                raise ValueError(f'台帳 {line} 行目の調理回の確度を確認してください。')
             if split == 'train' and label == OUT_OF_SCOPE:
                 raise ValueError(f'台帳 {line} 行目: 対象外の写真は検証または評価に使用してください。')
             if assigned.setdefault(session, split) != split:
@@ -58,7 +62,7 @@ def read_splits(manifest, photos):
                 if file_digest(image, 'sha256').hexdigest() != digest:
                     raise ValueError(f'台帳 {line} 行目の画像の SHA-256 が一致しません。')
             hashes.add(digest)
-            sets[split].append(Example(path, label, session, split))
+            sets[split].append(Example(path, label, session, split, status))
     for split, examples in sets.items():
         if not set(STANDARD_DISH_NAMES).issubset({item.label for item in examples}):
             raise ValueError(f'{split} に3種類すべての写真が必要です。確認できた別々の調理回を割り当ててください。')
@@ -113,15 +117,16 @@ def evaluate(examples, predictions):
                                 f1=ratio(2 * correct, support + proposed))
     total_correct = sum(sum(values) for values in groups.values())
     out_of_scope = sum(matrix[OUT_OF_SCOPE].values())
+    coverage = sum(name is not None for name in predictions) / len(examples)
     return dict(photos=len(examples), sessions=len(groups), overall_accuracy=total_correct/len(examples),
                 mean_session_accuracy=float(np.mean([np.mean(values) for values in groups.values()])),
-                coverage=sum(name is not None for name in predictions)/len(examples),
+                coverage=coverage, abstention_rate=1-coverage,
                 out_of_scope_rejection=ratio(matrix[OUT_OF_SCOPE][ABSTAIN], out_of_scope),
                 per_class=per_class, truth_order=truth_order, prediction_order=prediction_order,
                 confusion_matrix=[[matrix[row][col] for col in prediction_order] for row in truth_order])
 
 
-def run(manifest, photos, checkpoint, output, device='cpu'):
+def run(manifest, photos, checkpoint, output, device='cpu', *, fine_tune=False, group_status='confirmed'):
     sets = read_splits(manifest, photos)
     destination = Path(output)
     if destination.exists():
@@ -136,15 +141,40 @@ def run(manifest, photos, checkpoint, output, device='cpu'):
     for item, (embedding, _) in zip(sets['train'], evidence['train']):
         views.setdefault((item.session_id, item.label), []).append(embedding)
     head = fit_head([np.mean(items, axis=0) for items in views.values()], [key[1] for key in views])
-    reports = {}
-    for split, examples in sets.items():
-        features = evidence[split]
-        reports[split] = dict(
-            zero_shot=evaluate(examples, [suggestion.name for _, suggestion in features]),
-            linear_head=evaluate(examples, [head.select(embedding, suggestion.name) for embedding, suggestion in features]))
+    predictions = {}
+    for split, features in evidence.items():
+        predictions[split] = {
+            'zero_shot': [suggestion.name for _, suggestion in features],
+            'linear_head': [head.select(embedding, suggestion.name) for embedding, suggestion in features],
+        }
+    adapted = None
+    if fine_tune:
+        from .fine_tune_finished_dish import adapt_visual_block, adapted_predictions
+
+        adapted, block_state = adapt_visual_block(model, head, sets['train'])
+        for split, examples in sets.items():
+            predictions[split]['fine_tuned_block'] = adapted_predictions(
+                model, adapted, examples, predictions[split]['zero_shot'])
+    reports = {split: {method: evaluate(sets[split], result) for method, result in methods.items()}
+               for split, methods in predictions.items()}
+    if any(item.group_status == 'inferred' for sample in sets.values() for item in sample):
+        group_status = 'inferred'
+    reports['protocol'] = {'group_status': group_status, 'fine_tune': fine_tune,
+                           'shared_scope_check': 'original_openclip_prompts'}
     destination.mkdir(parents=True, exist_ok=False)
     for name, payload in [('head.json', head.artifact(CHECKPOINT_SHA256)), ('metrics.json', reports)]:
         (destination / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+    if adapted is not None:
+        model.torch.save({'checkpoint_sha256': CHECKPOINT_SHA256, 'last_visual_block': block_state,
+                          'head': adapted.artifact(CHECKPOINT_SHA256)}, destination / 'fine_tuned_block.pt')
+    with (destination / 'predictions.csv').open('w', encoding='utf-8', newline='') as stream:
+        writer = csv.writer(stream)
+        methods = list(predictions['train'])
+        writer.writerow(['split', 'file', 'label', 'session_id', *methods])
+        for split, examples in sets.items():
+            for index, item in enumerate(examples):
+                writer.writerow([split, item.path.relative_to(Path(photos).resolve()), item.label, item.session_id,
+                                 *(predictions[split][method][index] or ABSTAIN for method in methods)])
     return reports
 
 
@@ -153,9 +183,12 @@ def main():
     for name in ('manifest', 'photos', 'checkpoint', 'output'):
         cli.add_argument('--'+name, required=True, type=Path)
     cli.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
+    cli.add_argument('--fine-tune', action='store_true', help='Also adapt the last OpenCLIP visual block')
+    cli.add_argument('--group-status', choices=['confirmed', 'inferred'], default='confirmed')
     args = cli.parse_args()
     try:
-        run(args.manifest, args.photos, args.checkpoint, args.output, args.device)
+        run(args.manifest, args.photos, args.checkpoint, args.output, args.device,
+            fine_tune=args.fine_tune, group_status=args.group_status)
     except (ValueError, OSError, RuntimeError, ImportError) as exc:
         cli.exit(1, f'{exc}\n')
 
