@@ -65,10 +65,13 @@ def transform(rgb, condition):
 
 
 def summarize(rows):
+    total = len(rows)
+    abstained = sum(row['prediction'] == ABSTAIN for row in rows)
     return {
-        'photos': len(rows),
+        'photos': total,
         'correct': sum(row['truth'] == row['prediction'] for row in rows),
-        'abstained': sum(row['prediction'] == ABSTAIN for row in rows),
+        'abstained': abstained,
+        'false_reject_rate': abstained / total if total else None,
         'wrong_candidate': sum(row['prediction'] not in (row['truth'], ABSTAIN) for row in rows),
         'changed_from_original': sum(row['prediction'] != row['original'] for row in rows),
         'new_abstentions': sum(row['original'] != ABSTAIN and row['prediction'] == ABSTAIN for row in rows),
@@ -77,33 +80,47 @@ def summarize(rows):
     }
 
 
-def _checked_controls(manifest, root):
+def _checked_controls(manifest, root, supported_hashes):
     with manifest.open(encoding='utf-8-sig', newline='') as stream:
         reader = csv.DictReader(stream)
         if not {'file', 'kind', 'sha256'}.issubset(reader.fieldnames or ()):
             raise ValueError('Controls need file, kind and sha256 columns')
-        seen = set()
+        seen = set(supported_hashes)
         for row in reader:
-            path = (root / row['file']).resolve()
-            if not path.is_relative_to(root) or not row['kind'].strip():
+            relative = Path(row['file'] or '.')
+            kind = (row['kind'] or '').strip()
+            path = (root / relative).resolve()
+            if relative.is_absolute() or not path.is_relative_to(root) or not path.is_file() or not kind:
                 raise ValueError('Invalid control path or kind')
             with path.open('rb') as photo:
                 digest = file_digest(photo, 'sha256').hexdigest()
             if digest != row['sha256'] or digest in seen:
                 raise ValueError('Control hash mismatch or duplicate')
             seen.add(digest)
-            yield row['file'], row['kind'], path
+            yield relative.as_posix(), kind, path
 
 
-def evaluate_dataset(model, dataset, controls=None, control_root=None):
+def summarize_controls(counts):
+    total = counts.total()
+    abstained = counts[ABSTAIN]
+    false_accepts = total - abstained
+    return dict(photos=total, abstained=abstained, false_accepts=false_accepts,
+                false_accept_rate=false_accepts / total if total else None,
+                rejection_rate=abstained / total if total else None, candidates=dict(counts))
+
+
+def evaluate_dataset(model, dataset, controls=None, control_root=None, *, original_only=False):
     receipt, _ = audit_receipt(dataset)
-    rows = {name: [] for name in CONDITIONS}
+    conditions = {'original': CONDITIONS['original']} if original_only else CONDITIONS
+    rows = {name: [] for name in conditions}
+    supported_hashes = set()
     with (dataset / 'labels.csv').open(encoding='utf-8-sig', newline='') as stream:
         for item in csv.DictReader(stream):
+            supported_hashes.add(item['training_image_sha256'])
             rgb = image_to_rgb(dataset / item['image_path'])
             truth = CLASSES[item['class_label']][1]
             original = model.predict(rgb).name or ABSTAIN
-            for condition in CONDITIONS:
+            for condition in conditions:
                 prediction = (original if condition == 'original' else
                               (model.predict(transform(rgb, condition)).name or ABSTAIN))
                 rows[condition].append(dict(file=item['image_path'], truth=truth,
@@ -113,27 +130,24 @@ def evaluate_dataset(model, dataset, controls=None, control_root=None):
         summaries[condition] = summarize(photos)
         summaries[condition]['by_class'] = {label: summarize([row for row in photos if row['truth'] == label])
                                              for _, label in CLASSES.values()}
-    frame_disagreements = sum(a['prediction'] != b['prediction']
-                              for a, b in zip(rows['light_frame'], rows['dark_frame'], strict=True))
+    frame_disagreements = None if original_only else sum(
+        a['prediction'] != b['prediction'] for a, b in zip(rows['light_frame'], rows['dark_frame'], strict=True))
     controls_by_kind = {}
     controls_rows = []
     if controls:
-        for file, kind, path in _checked_controls(controls, control_root.resolve(strict=True)):
+        for file, kind, path in _checked_controls(controls, control_root.resolve(strict=True), supported_hashes):
             prediction = model.predict(image_to_rgb(path)).name or ABSTAIN
             controls_rows.append(dict(file=file, kind=kind, prediction=prediction))
             counts = controls_by_kind.setdefault(kind, Counter())
             counts[prediction] += 1
-    control_metrics = {}
-    for kind, counts in controls_by_kind.items():
-        total = counts.total()
-        control_metrics[kind] = dict(photos=total, abstained=counts[ABSTAIN],
-                                     false_accept_rate=1-counts[ABSTAIN]/total, candidates=dict(counts))
-    return dict(receipt=receipt, transforms=CONDITIONS, by_condition=summaries,
+    control_metrics = {kind: summarize_controls(counts) for kind, counts in controls_by_kind.items()}
+    return dict(receipt=receipt, transforms=conditions, by_condition=summaries,
                 frame_disagreements=frame_disagreements, photo_results=rows,
-                controls=control_metrics, control_photo_results=controls_rows)
+                controls=control_metrics, control_photo_results=controls_rows,
+                all_controls=summarize_controls(Counter(row['prediction'] for row in controls_rows)))
 
 
-def run(checkpoint, device='cpu', *, dataset=None, photo=None, controls=None, control_root=None):
+def run(checkpoint, device='cpu', *, dataset=None, photo=None, controls=None, control_root=None, original_only=False):
     started = perf_counter()
     model = LocalDishClassifier(checkpoint, device)
     device_sync(model.torch, device)
@@ -153,7 +167,7 @@ def run(checkpoint, device='cpu', *, dataset=None, photo=None, controls=None, co
         result.update(prediction=prediction, first_inference_s=times[0], warm_inference_median_s=median(times[1:]),
                       warm_inference_samples_s=times[1:])
     if dataset:
-        result.update(evaluate_dataset(model, dataset, controls, control_root))
+        result.update(evaluate_dataset(model, dataset, controls, control_root, original_only=original_only))
     result.update(memory_report(model.torch, device))
     return result
 
@@ -168,14 +182,17 @@ def main():
     inputs.add_argument('--photo', type=Path)
     parser.add_argument('--controls', type=Path)
     parser.add_argument('--control-root', type=Path)
+    parser.add_argument('--original-only', action='store_true', help='Compare rates without image transformations')
     args = parser.parse_args()
     if (args.controls is None) != (args.control_root is None) or (args.controls and not args.dataset):
         parser.error('--controls and --control-root require --dataset')
+    if args.original_only and not args.dataset:
+        parser.error('--original-only requires --dataset')
     if args.output.exists():
         parser.error('Choose a new output file')
     try:
         result = run(args.checkpoint, args.device, dataset=args.dataset, photo=args.photo,
-                     controls=args.controls, control_root=args.control_root)
+                     controls=args.controls, control_root=args.control_root, original_only=args.original_only)
         with args.output.open('x', encoding='utf-8') as out:
             json.dump(result, out, ensure_ascii=False, indent=2)
     except (ValueError, OSError, RuntimeError, ImportError) as exc:

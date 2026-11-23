@@ -12,44 +12,84 @@
 
 [家庭内LANの手順](../packaging/windows/SMARTPHONE_JA.md)
 
-## Windowsで端末内AIを追加
+## Windowsで完成料理の認識を準備する
 
-CPU版から開始できます。管理者はPowerShellを開き、通常のセットアップで作成した専用仮想環境へ追加でインストールします。GitHubのコードと個人データのあるフォルダーは分けて管理します。
+Python 3.12の64ビットx64版を使います。PowerShellでPasta Lensを展開したフォルダーに移動し、`setup_windows.bat` で通常のアプリをセットアップします。以下のCPU版の追加インストールも、そのアプリの `.venv` に行います。
 
 ```powershell
+.\setup_windows.bat
 .\.venv\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1
 .\.venv\Scripts\python.exe -m pip install -r pasta_weight_app_v2/requirements-local-vision.txt
-.\.venv\Scripts\python.exe -m pip install "mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2"
+.\.venv\Scripts\python.exe -m pip check
 ```
 
-次の公式ファイルを自分のPCの非公開フォルダーへ保存します。写真による推論はPC内で実行します。任意のCUDA対応GPUを使うには、CPU版の代わりに対応するPyTorch・torchvisionを用意し、`PASTA_LOCAL_VISION_DEVICE=cuda` を設定します。
-
-| 用途 | モデル | 取得元と条件 |
-|---|---|---|
-| 乾麺の抽出 | MobileSAM ViT-T | 公式の [MobileSAM重み](https://github.com/ChaoningZhang/MobileSAM/blob/f706ad9c4eb7f219c00d9050e46328518ffb65d2/weights/mobile_sam.pt) 約41 MB。[Apache 2.0](https://github.com/ChaoningZhang/MobileSAM/blob/master/LICENSE) |
-| 完成料理の候補 | OpenCLIP ViT-B/32 QuickGELU LAION400M E32 | 公式 [OpenCLIP重み](https://github.com/mlfoundations/open_clip/releases/download/v0.2-weights/vit_b_32-quickgelu-laion400m_e32-46683a32.pt) 約605 MB。[ソースライセンスと配布情報](https://github.com/mlfoundations/open_clip) |
+[公式のOpenCLIP重み](https://github.com/mlfoundations/open_clip/releases/download/v0.2-weights/vit_b_32-quickgelu-laion400m_e32-46683a32.pt)をPC内の非公開フォルダーへ保存します。使うモデルはViT-B/32 QuickGELU LAION400M E32で、重みは約605 MBです。下のパスを保存先に合わせ、SHA-256が一致したことを確認して同じPowerShellで設定します。写真の推論はPC内で行われます。
 
 ```powershell
-$env:PASTA_MOBILESAM_CHECKPOINT = "C:\PastaLensModels\mobile_sam.pt"
-$env:PASTA_OPENCLIP_CHECKPOINT = "C:\PastaLensModels\vit_b_32-quickgelu-laion400m_e32-46683a32.pt"
+$Model = 'C:\PastaLensModels\vit_b_32-quickgelu-laion400m_e32-46683a32.pt'
+$Expected = '46683a32721d5c68911153698992361285d20ca690bb4f317c11e45c03d798fa'
+if ((Get-FileHash -LiteralPath $Model -Algorithm SHA256 -ErrorAction Stop).Hash -ne $Expected) {
+    throw 'OpenCLIPの重みが公式ファイルと一致しません。ダウンロード元と保存先を確認してください。'
+} else {
+    $env:PASTA_OPENCLIP_CHECKPOINT = $Model
+    $env:PASTA_LOCAL_VISION_DEVICE = 'cpu'
+}
+```
+
+### Windowsで読み込み・推論時間・メモリを測る
+
+自分で撮ったJPEGまたはPNGの写真を指定します。`$Photo` を手元のパスに変更してください。診断は写真を変更せず、時刻やメモリの測定結果を新規の一時フォルダーに保存します。
+
+```powershell
+$Photo = 'C:\PastaPrivate\photo.jpg'
+$CheckDir = Join-Path $env:TEMP ('pasta-dish-check-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $CheckDir | Out-Null
+$Report = Join-Path $CheckDir 'dish-profile.json'
+.\.venv\Scripts\python.exe -m pasta_weight_app_v2.experiments.bench_dish_vision --checkpoint "$env:PASTA_OPENCLIP_CHECKPOINT" --photo "$Photo" --output "$Report" --device cpu
+if ($LASTEXITCODE -ne 0) { throw '診断に失敗しました。上のエラーを確認してください。' }
+Get-Content -LiteralPath $Report -Raw
+```
+
+| JSONの項目 | 確認する値 |
+|---|---|
+| `platform` / `torch_version` / `device` | OS、PyTorchの版、実行デバイス |
+| `cold_load_s` | 新しいプロセスでモデルを読み込む秒数。SHA-256の検証を含む |
+| `decode_s` | 画像を開いて推論用に整える秒数 |
+| `first_inference_s` / `warm_inference_median_s` | 初回の推論と、続く5回の推論時間の中央値 |
+| `host_process_peak_rss_bytes` | 診断プロセスのピーク実メモリ。Windowsではピークワーキングセットで、MiBへは1,048,576で割る。取得不可なら `null` |
+| `prediction` | 料理候補または判別不能 |
+
+画像の選択から候補が出るまでのブラウザー上の時間も知りたい場合は、次の操作手順で別に計測してください。CLIの時間にはブラウザーとの転送を含みません。Windows実機での導入、推論時間、メモリ使用量は未確認です。
+
+### Windows実機で確認する操作
+
+本番の食事記録と分けて確認するには、上で作った一時フォルダー内に検証用の保存先を指定します。既存アプリを終了してから、モデル設定と同じPowerShellで起動します。
+
+```powershell
+$env:PASTA_DATA_DIR = Join-Path $CheckDir 'app-data'
+$env:PASTA_RESEARCH_DATA_DIR = Join-Path $CheckDir 'research-data'
 .\start_windows.bat
 ```
 
-iPhoneで利用するときは、同じPowerShellで `.\start_lan.bat` を起動します。環境変数はこのPowerShellの子プロセスに引き継がれます。AIの設定がない場合は、従来の重量推定、実測記録、料理名の選択、栄養計算を利用できます。測定に使ったモデルはGitHub・配布ZIPへ同梱しません。Windows実機の導入とiPhoneのカメラ・ネットワークは別途確認が必要です。
+1. ホームの「完成した料理を記録する」で、自分で調理したカルボナーラ・トマトパスタ・ジェノベーゼのいずれかの写真を選びます。候補または判別不能が出ることを確認します。
+2. 「標準レシピの料理」で候補を確認または変更し、「選んだ料理の標準レシピを使う」を押します。候補が出ないときも選べます。
+3. 「計算に使う乾麺」で参考重量を入力します。保存済み重量でも試す場合は、ホームで実測重量を新規に保存してからその記録を選びます。料理候補は材料や実際の使用量を決めないので、材料を編集して確認します。
+4. 全体と食べた分の栄養が更新されたら「食事記録を保存」を押します。「記録」の食事日記とカレンダーを開き、料理名、栄養、写真が残ることを確認します。
+5. モデル未設定時は、起動したPowerShellでCtrl+Cを押して終了し、 `Remove-Item Env:PASTA_OPENCLIP_CHECKPOINT -ErrorAction SilentlyContinue` を実行し、同じ保存先で再起動します。写真を選び、料理名を手動で指定して材料の編集と保存まで進めます。
+6. 読み込み失敗時は、起動を止めて `$env:PASTA_OPENCLIP_CHECKPOINT = Join-Path $CheckDir 'missing-checkpoint.pt'` を設定し、再起動します。写真を選ぶと読み込みに失敗した旨が案内されます。料理を手動で選択でき、食事記録を保存できることを確認します。
 
-### Windowsで読み込みと応答時間を計測する
+確認後に検証用PowerShellを閉じると、そのウィンドウで設定した検証用保存先は別の起動に引き継がれません。本番利用は、通常の保存先を使うPowerShellで公式重みを設定し、`start_windows.bat` を起動してください。候補を使わずに記録したいときは、画面の「写真から料理候補を表示」をオフにできます。
 
-上記と同じPowerShellで、使用できる写真1枚を指定して計測します。
+### 乾麺のMobileSAMを追加する場合
+
+乾麺の画像抽出にMobileSAMを使う場合は、別途固定したソースをインストールし、公式の重みを指定します。料理候補を使う手順は上のOpenCLIPの設定で完了します。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pasta_weight_app_v2.experiments.bench_dish_vision `
-  --checkpoint $env:PASTA_OPENCLIP_CHECKPOINT --photo C:\PastaPrivate\photo.jpg `
-  --output C:\PastaPrivate\dish-profile.json
+.\.venv\Scripts\python.exe -m pip install "mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2"
+$env:PASTA_MOBILESAM_CHECKPOINT = 'C:\PastaLensModels\mobile_sam.pt'
 ```
 
-起動直後の読み込み時間（SHA-256の検証を含む）、画像の展開時間、初回推論、後続5回の中央値、プロセスのピークワーキングセットを記録します。推論の計測値はブラウザーとの転送時間を含みません。Linuxの測定値はWindows実機の性能値とは区別します。
-
-手動での動作を確認する場合は、PowerShellで `Remove-Item Env:PASTA_OPENCLIP_CHECKPOINT -ErrorAction SilentlyContinue` を実行し、アプリを起動し直します。設定されている環境でも、記録画面のスイッチで手動に切り替えられます。
+MobileSAM ViT-Tの重みは約41 MBです。CUDAを使う場合は、CUDA対応のPyTorchと対応するtorchvisionをインストールし、`PASTA_LOCAL_VISION_DEVICE=cuda` を設定します。iPhoneから接続する場合は公式重みを設定した同じPowerShellで `.\start_lan.bat` を起動します。 [MobileSAM公式重み](https://github.com/ChaoningZhang/MobileSAM/blob/f706ad9c4eb7f219c00d9050e46328518ffb65d2/weights/mobile_sam.pt) · [MobileSAMのライセンス](https://github.com/ChaoningZhang/MobileSAM/blob/master/LICENSE)
 
 ## 管理者の起動方法
 
@@ -106,6 +146,13 @@ OpenCLIPの画像エンコーダーは固定し、調理回ごとに集約した
 `bench_dish_vision --dataset PRIVATE_DATASET --checkpoint OFFICIAL_WEIGHTS --output PRIVATE_RESULT.json` は、検証済み台帳の全写真に固定した露出、色かぶり、回転、射影変形、縮小、明暗の余白を適用し、正解、誤った候補、判別不能、原画像からの変化を記録します。余白は画像全体に同じ幅の枠を加える試験で、背景を実際に交換する試験には別撮影が必要です。回転・射影変形で別角度の遮蔽や反射を再現できる範囲は限られます。
 
 利用できる対象外画像がある場合は、`--controls PRIVATE_CONTROLS.csv --control-root PRIVATE_ROOT` を追加します。列は `file,kind,sha256` です。乾麺やその他の物体と、対象外の完成料理には別の `kind` を付け、誤候補率をそれぞれ集計します。候補表示のしきい値は同じままで比較します。料理名の候補は、重量・材料・実際の使用量の測定には使いません。
+
+撮影条件の変換を省き、両方の割合を同じ比較で確認する場合は `--original-only` を追加します。
+
+- `by_condition.original.false_reject_rate` は、正解が3種類に含まれる全写真に対する判別不能の割合です。別の候補を出した件数は `wrong_candidate` を確認します。`by_class` には料理別の結果があります。
+- `controls` の各 `false_accept_rate` は、その対象外グループの全写真に対し、3種類のいずれかを誤って候補に出した割合です。`rejection_rate` は同じグループで判別を見送った割合です。対象外写真を指定しなかった場合は、`all_controls` の割合が `null` になります。
+
+対象外の完成料理には、評価に利用できる権利を確認した写真を使い、料理名と出典・利用条件を台帳に残します。ペペロンチーノ・クリームパスタ・ナポリタンなどの結果は料理別に確認してください。乾麺だけの見送り率では、別の完成料理の誤候補率は分かりません。
 
 ## 管理者向けのA4計測・校正
 
@@ -166,4 +213,4 @@ MobileSAMは見えている麺の欠けが少ない一方、分離した麺の�
 
 既存写真では有効なA4マーカーが0件でした。A4実寸でのA・B・Cの誤差は未測定です。SAM 2.1とDINOv3は接続試験に初期化重みを使用しました。SAM 3.1は一フレームの呼び出しと終了をモックで確認しました。この環境ではMeta公式の配布先から該当する事前学習重みを取得できず、CUDAも使えませんでした。独立実測試料でのMAE・RMSE・成功率は未測定です。
 
-完成料理はOpenCLIPの公式重みで合成プレート3枚、乾麺の実写真1枚、空の入力1枚を動かしました。この5件はすべて候補表示を見送り、料理名を選べる状態になりました。3種類に対応したプロンプトと見える具材の候補を実装し、採択・見送り・修正をテストしました。正解を確認した完成料理の写真を用いた精度評価はまだです。
+完成料理の初回接続確認では、OpenCLIPの公式重みで合成プレート3枚、乾麺の実写真1枚、空の入力1枚を動かしました。この5件はすべて候補表示を見送り、手動で料理名を選べました。その後の実写真評価の実行手順は「撮影条件と対象外画像の評価」を参照してください。
