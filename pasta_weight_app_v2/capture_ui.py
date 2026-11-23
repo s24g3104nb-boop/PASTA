@@ -42,7 +42,7 @@ def render_capture():
     st.button('ホームに戻る', icon=':material/arrow_back:', on_click=lambda: st.session_state.pop('capture_source',None))
     st.subheader('パスタを撮影' if source_kind=='スマホで撮影' else '写真からはじめる')
     st.caption('乾麺をできるだけ平らに広げ、重なりを少なくして、真上から撮影してください。')
-    st.caption('黒などの暗く無地で反射の少ない背景を使い、麺の両端が写るように余白を残してください。')
+    st.caption('暗く無地で反射の少ない背景を使い、麺に似た黄色い物を避けて、両端が写るようにしてください。')
     st.button('撮り直す・写真を選び直す', on_click=start_capture, args=(source_kind,), key='retake_photo')
     modes = ['広げた状態', '束の断面']
     admin = st.session_state.get('_app_admin', False)

@@ -42,6 +42,8 @@ def render_area_proportion():
         else:
             st.write(f"約 {result['estimated_g']:.1f} g。{result['status']}")
     st.write(f'抽出面積 {evidence.area_px:,} px²（長辺960px）')
+    if evidence.strand_width.width_px is not None:
+        st.write(f'分離した麺の代表幅 {evidence.strand_width.width_px:.2f} px')
     st.image(evidence.scene, caption='入力画像')
     for name, mask in yellow_masks(evidence.scene).items():
         mask_column, overlay_column = st.columns(2)

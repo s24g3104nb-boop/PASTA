@@ -115,19 +115,24 @@ def describe_mask(scene, mask):
     geometry = mask_geometry(mask)
     length = geometry['quantile_length_px']
     fraction = area / mask.size
-    reason = ''
-    if fraction < .025 or length < 25:
-        reason = '乾麺の領域が少なすぎます。麺をもう少し大きく写してください。'
-    elif dark / mask.size < .09:
-        reason = '暗く無地の背景に置き、反射を避けてください。'
-    elif mask[[0, -1], :].any() or mask[:, [0, -1]].any():
-        reason = '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
-    else:
-        thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
-        if np.quantile(thickness[mask], .75) > .018 * length or fraction > .73:
-            reason = '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
+    reason = mask_capture_reason(mask, length, dark_fraction=dark / mask.size)
     return Observation(fraction, float(area / max(area + dark, 1)),
                        float(geometry['area_over_length_squared']), reason)
+
+
+def mask_capture_reason(mask, length, *, dark_fraction=None):
+    """Shared framing and shape checks, with a dark-background check for the shipped model."""
+    fraction = np.count_nonzero(mask) / mask.size
+    if fraction < .025 or length < 25:
+        return '乾麺の領域が少なすぎます。麺をもう少し大きく写してください。'
+    if dark_fraction is not None and dark_fraction < .09:
+        return '暗く無地の背景に置き、反射を避けてください。'
+    if mask[[0, -1], :].any() or mask[:, [0, -1]].any():
+        return '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
+    thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    if np.quantile(thickness[mask], .75) > .018 * length or fraction > .73:
+        return '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
+    return ''
 
 
 def observe(rgb):

@@ -8,7 +8,7 @@ from PIL import Image
 import pytest
 
 from pasta_weight_app_v2.experiments.area_proportion import (
-    OUTSIDE_EVALUATED_RANGE, PRIMARY, analyze, calibrate, paired_color_deltas,
+    OUTSIDE_EVALUATED_RANGE, PRIMARY, WIDTH_AREA, WIDTH_MISSING, analyze, calibrate, paired_color_deltas,
     patch_colors, predict, yellow_masks,
 )
 from pasta_weight_app_v2.experiments.compare_area_proportion import compare, load_originals
@@ -48,8 +48,46 @@ def test_track_area_reduces_scale_dependence_and_rejects_missing_length():
     assert resized.features[PRIMARY] / reference.features[PRIMARY] == pytest.approx(1, abs=.12)
     model = calibrate([reference]*3)
     assert predict(model, replace(resized, features=dict(resized.features, track_area=None)))['estimated_g'] is None
+    clipped = rgb.copy()
+    clipped[80:85, :100] = rgb[80, 100]
     with pytest.raises(ValueError, match='基準写真'):
-        calibrate([reference, reference, replace(resized, capture_reason='見切れ')])
+        calibrate([reference, reference, analyze(clipped)])
+
+
+def test_isolated_width_uses_both_edges_and_works_with_neutral_light_background():
+    dark = _spread()
+    light = dark.copy()
+    light[np.all(dark == 37, axis=2)] = [236, 237, 239]
+    reference, pale = analyze(dark), analyze(light)
+    assert reference.strand_width.width_px == pytest.approx(5., abs=.2)
+    assert reference.strand_width.tiles >= 3
+    assert pale.strand_width == reference.strand_width
+    assert '暗く無地' in pale.capture_reason and not pale.width_capture_reason
+    model = calibrate([pale, reference, pale])
+    assert predict(model, pale, WIDTH_AREA)['estimated_g'] == pytest.approx(20.)
+    assert PRIMARY not in model
+
+    # Connected slabs and unresolved 2px lines do not establish an individual width.
+    merged = np.full_like(dark, 37)
+    merged[100:143, 100:850] = dark[80, 100]
+    thin = np.full_like(dark, 37)
+    for y in range(80, 500, 18):
+        thin[y:y+2, 100:850] = dark[80, 100]
+    for rgb in (merged, thin):
+        evidence = analyze(rgb)
+        assert evidence.strand_width.width_px is None
+        outcome = predict(model, evidence, WIDTH_AREA)
+        assert outcome['estimated_g'] is None and WIDTH_MISSING in outcome['reason']
+
+
+def test_isolated_width_area_partly_cancels_a_smaller_projection():
+    rgb = _spread()
+    small = np.full_like(rgb, 128)
+    small[90:630, 120:840] = cv2.resize(rgb, (720, 540), interpolation=cv2.INTER_AREA)
+    reference, resized = analyze(rgb), analyze(small)
+    assert resized.strand_width.width_px / reference.strand_width.width_px == pytest.approx(.75, abs=.1)
+    assert resized.features[WIDTH_AREA] / reference.features[WIDTH_AREA] == pytest.approx(1, abs=.17)
+    assert resized.features['frame_area'] / reference.features['frame_area'] < .66
 
 
 def test_patch_colors_pair_against_the_same_photo_and_report_mask_inclusion():
@@ -95,10 +133,14 @@ def _make_batch(root):
 def test_batch_checks_original_bytes_and_higher_labels_only_score_predictions(tmp_path):
     manifest = _make_batch(tmp_path)
     original_content = (tmp_path / 'manifest.json').read_bytes()
-    first = compare(tmp_path, tmp_path / 'first')
+    first = compare(tmp_path, tmp_path / 'first', scale_stress=True)
     assert first['reference_specimens'] == 1 and first['independent_evaluation'] is None
     assert len(first['rows']) == 15
     assert first['groups']['40-100'][PRIMARY]['diagnostic_g']['images'] == 12
+    assert first['groups']['40-100'][WIDTH_AREA]['matched_diagnostic_g']['images'] == 12
+    assert first['scale_stress']['smaller_in_frame_75'][WIDTH_AREA]['pairs'] == 15
+    assert first['rows'][0]['visible_dense_fraction'] == 0.
+    assert first['rows'][0]['visible_texture']['pitch_px'] is None
     assert all(row['color_corrected_g'] is None for row in first['rows'])
     assert (tmp_path / 'manifest.json').read_bytes() == original_content
     assert (tmp_path / 'first/images/01_hsv_lab.png').is_file()

@@ -7,24 +7,31 @@ import math
 import cv2
 import numpy as np
 
-from ..geometry_candidate import skeletonize
+from ..geometry_candidate import skeleton_measurements, skeletonize
 from ..pasta_vision import image_quality_warnings
 from ..sheetless_area import (MIN_LONG_SIDE, _load_model, canonical_image, describe_mask,
-                              estimate_observation, pasta_mask)
+                              estimate_observation, mask_capture_reason, pasta_mask)
+from .isolated_strand_width import WidthMeasurement, isolated_strand_width
 from .sheetless_lengths import projected_reference_length
 
 REFERENCE_G = 20
 EVALUATED_MAX_G = 100
 PRIMARY = 'track_area'
-FEATURES = ('frame_area', 'pca_area', PRIMARY)
+WIDTH_AREA = 'width_area'
+PREVIOUS_WIDTH_AREA = 'previous_width_area'
+WIDTH_METHODS = (WIDTH_AREA, PREVIOUS_WIDTH_AREA)
+FEATURES = ('frame_area', 'pca_area', PRIMARY, *WIDTH_METHODS)
 DESCRIPTIONS = {
     'frame_area': '面積 ÷ 画像全体の面積（距離補正なし）',
     'pca_area': '面積 ÷ 麺全体の長軸長²（20g比例換算）',
     'track_area': '面積 ÷ 長い線候補の長さ²（20g比例換算）',
+    WIDTH_AREA: '面積 ÷ 分離した麺の代表幅²（20g比例換算）',
+    PREVIOUS_WIDTH_AREA: '面積 ÷ 従来の距離変換による麺幅²（比較用）',
 }
 OUTSIDE_EVALUATED_RANGE = '外挿・未検証（20〜100gの探索範囲外）'
 EXPLORATORY = '探索的な概算・未検証（20g基準）'
 SCALE_MISSING = '麺の長い連続線を確認できず、相対尺度を求められません。'
+WIDTH_MISSING = '分離した麺の両側を十分に確認できず、代表幅を求められません。'
 PATCH_TYPES = ('single', 'crossing', 'dense', 'outside_tray_pasta',
                'white_background', 'tray_reflection', 'tray_background')
 
@@ -58,6 +65,9 @@ class Evidence:
     legacy_weight_g: float | None
     legacy_reason: str
     legacy_diagnostic_g: float | None
+    strand_width: WidthMeasurement
+    previous_width_px: float | None
+    width_capture_reason: str
 
 
 def analyze(rgb, *, scene=None, mask=None):
@@ -68,37 +78,51 @@ def analyze(rgb, *, scene=None, mask=None):
         mask = pasta_mask(scene)
     observation = describe_mask(scene, mask)
     area = int(np.count_nonzero(mask))
-    track = 0.
+    track = envelope_px = 0.
+    strand_width = WidthMeasurement()
+    previous_width = None
     if area and observation.area_over_length_squared > 0:
         ys, xs = np.nonzero(mask)
-        crop = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-        centerline = skeletonize(np.pad(crop, 2))
+        bounds = np.s_[ys.min():ys.max()+1, xs.min():xs.max()+1]
+        padded = np.pad(mask[bounds], 2)
+        centerline = skeletonize(padded)
         envelope_px = math.sqrt(area / observation.area_over_length_squared)
         track = projected_reference_length(centerline, envelope_px)
-    capture_reason = ' '.join(image_quality_warnings(rgb)) or observation.reason
+        aligned = np.zeros(mask.shape, dtype=np.uint8)
+        aligned[bounds] = centerline[2:-2, 2:-2]
+        strand_width = isolated_strand_width(mask, aligned)
+        _, previous_width, _, _, _ = skeleton_measurements(padded, centerline, width_percentile=25)
+    quality_reason = ' '.join(image_quality_warnings(rgb))
     if max(rgb.shape[:2]) < MIN_LONG_SIDE:
-        capture_reason = '画像の解像度不足'
+        quality_reason = '画像の解像度不足'
+    capture_reason = quality_reason or observation.reason
+    width_capture_reason = quality_reason or mask_capture_reason(mask, envelope_px)
     current = estimate_observation(observation)
     legacy = _load_model()
     raw = legacy.predict(getattr(observation, legacy.area_feature)) if area else None
     return Evidence(scene, mask,
                     {'frame_area': observation.image_fraction,
                      'pca_area': observation.area_over_length_squared,
-                     PRIMARY: area / track**2 if track else None},
+                     PRIMARY: area / track**2 if track else None,
+                     WIDTH_AREA: area / strand_width.width_px**2 if strand_width.width_px else None,
+                     PREVIOUS_WIDTH_AREA: area / previous_width**2 if previous_width else None},
                     area, track, capture_reason,
-                    None if capture_reason else current.weight_g, capture_reason or current.reason, raw)
+                    None if capture_reason else current.weight_g, capture_reason or current.reason, raw,
+                    strand_width, previous_width or None, width_capture_reason)
 
 
 def calibrate(references):
     """Three placements of one 20g sample, treated as a single reference."""
     if len(references) != 3:
         raise ValueError('同じ20g試料を配置し直した写真を3枚指定してください。')
-    problems = [f'{i}枚目: {ref.capture_reason}' for i, ref in enumerate(references, 1)
-                if ref.capture_reason]
+    problems = [f'{i}枚目: {ref.width_capture_reason}' for i, ref in enumerate(references, 1)
+                if ref.width_capture_reason]
     if problems:
         raise ValueError('基準写真を確認してください。' + ' '.join(problems))
     result = {}
     for key in FEATURES:
+        if key not in WIDTH_METHODS and any(ref.capture_reason for ref in references):
+            continue
         values = [ref.features[key] for ref in references]
         if all(value is not None and math.isfinite(value) and value > 0 for value in values):
             result[key] = float(median(values))
@@ -109,17 +133,19 @@ def predict(model, evidence, method=PRIMARY):
     """Return the raw research value and the value after capture checks."""
     value = evidence.features[method]
     reference = model.get(method)
+    capture_reason = evidence.width_capture_reason if method in WIDTH_METHODS else evidence.capture_reason
     if not reference:
         reason = '3枚の基準写真すべてでこの面積特徴を確認できませんでした。'
         return dict(diagnostic_g=None, estimated_g=None, reason=reason, status='')
     if value is None or value <= 0:
-        reason = evidence.capture_reason or (SCALE_MISSING if method == PRIMARY else '乾麺の領域がありません。')
+        missing = {PRIMARY: SCALE_MISSING, **dict.fromkeys(WIDTH_METHODS, WIDTH_MISSING)}
+        reason = ' '.join(filter(None, (capture_reason, missing.get(method)))) or '乾麺の領域がありません。'
         return dict(diagnostic_g=None, estimated_g=None, reason=reason, status='')
     grams = REFERENCE_G * value / reference
     status = (OUTSIDE_EVALUATED_RANGE if grams > EVALUATED_MAX_G or grams < REFERENCE_G
               else EXPLORATORY)
-    return dict(diagnostic_g=grams, estimated_g=None if evidence.capture_reason else grams,
-                reason=evidence.capture_reason, status=status)
+    return dict(diagnostic_g=grams, estimated_g=None if capture_reason else grams,
+                reason=capture_reason, status=status)
 
 
 def overlay(scene, mask):
