@@ -17,7 +17,12 @@ def render_developer_tools():
                           args=('dev_tools_toggle', 'dev_tools_enabled'))
     st.session_state['dev_tools_enabled'] = enabled
     tools = st.selectbox('開発ツール', ['推定設定・検出結果', '学習データ・AIモデル管理',
-                                  '独立試料・撮影データ登録', 'A4基準の試し撮り'], key='developer_section')
+                                  '独立試料・撮影データ登録', 'A4基準の試し撮り',
+                                  '20g基準の面積換算'], key='developer_section')
+    if tools == '20g基準の面積換算':
+        from pasta_weight_app_v2.experiments.area_proportion_ui import render_area_proportion
+        render_area_proportion()
+        return
     if tools == 'A4基準の試し撮り':
         from capture_preflight_ui import render_capture_preflight
         render_capture_preflight()

@@ -143,6 +143,7 @@ normal.radio(key="main_nav").set_value("設定").run()
 assert normal.selectbox(key="appearance")
 assert not any(w.key in {"settings_section","product_edit_mode","cooking_section"} for w in normal.selectbox)
 assert "developer_ui" not in sys.modules and "training_manager" not in sys.modules
+assert "pasta_weight_app_v2.experiments.area_proportion_ui" not in sys.modules
 config.set_option("server.address","0.0.0.0")
 denied=AppTest.from_file(app/"admin_app.py").run()
 assert denied.error and not denied.text_input and not root.exists()
@@ -172,7 +173,10 @@ fresh.selectbox(key="settings_section").set_value("製品・校正").run()
 assert fresh.selectbox(key="product_edit_mode")
 assert any(w.label == "1本あたりの重量（g）" for w in fresh.number_input)
 fresh.selectbox(key="settings_section").set_value("開発・検証ツール").run()
-assert fresh.selectbox(key="developer_section")
+fresh.selectbox(key="developer_section").set_value("20g基準の面積換算").run()
+assert not fresh.exception and len(fresh.get('file_uploader')) == 2
+next(b for b in fresh.button if b.label == '面積と重量を比較する').click().run()
+assert any('基準写真を3枚' in msg.value for msg in fresh.info)
 '''
     result = subprocess.run([sys.executable,'-c',script], cwd=APP.parent, capture_output=True, text=True,
                             env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'public'),

@@ -96,6 +96,22 @@ python -m pasta_weight_app_v2.experiments.compare_sheetless_lengths compare --re
 python -m pasta_weight_app_v2.experiments.compare_sheetless_lengths predict --report PRIVATE_COMPARISON.json --method C --image PRIVATE_PHOTO.jpeg
 ```
 
+## 20g基準の面積比例換算
+
+管理者アプリの「設定 → 開発・検証ツール → 20g基準の面積換算」で、同一の20g試料を配置し直した基準写真3枚と、推定対象の写真1枚を比較できます。処理はローカルで行い、推定と写真を測定履歴には保存しません。一般向けの重量推定は現行の面積比を使います。
+
+HSV＋Labで抽出した可視面積を使い、`20 × 対象の面積特徴 ÷ 基準3枚の面積特徴の中央値` で重量を計算します。画面面積で割った面積率、麺全体の主軸長の2乗で割った面積比、細線化したマスクの長い直線候補の長さの2乗で割った面積比を比較します。最後の長さは撮影スケールの代理値です。全長を捉えた保証はなく、実寸や実際の撮影距離を測った値でもありません。面積特徴が基準の6倍なら換算値は120gとなります。100gを超える値は「外挿・未検証」と表示し、既存の画質・見切れ・密集の判定で見送る条件も適用します。
+
+重量付きの写真で再現するには、写真と `manifest.json` のある非公開フォルダーと、新しい非公開出力先を指定します。
+
+```text
+python -m pasta_weight_app_v2.experiments.compare_area_proportion --originals PRIVATE_BATCH --output PRIVATE_RESULTS
+```
+
+この実験は20・40・60・80・100gの各3配置を対象とします。SHA-256とJPEGの寸法を照合し、20gの3枚だけで基準を決め、40〜100gのラベルは誤差集計に使います。結果には写真、HSV・Lab・HSV＋Labのマスクと重ね合わせ、判定前の重量、見送り理由、共通して数値を算出できた写真での比較を出力します。重量間で材料を共有していないことを確認できていないため、誤差は探索的な比較に使い、独立精度の評価には使いません。
+
+原本SHA-256をキーとする非公開の `--color-reviews` JSONを与えると、長辺960pxの画像上で目視指定した座標（`x`、`y`、`kind`、任意の `radius`）のRGB・HSV・Labを測れます。`single`、`crossing`、`dense` はそれぞれ分離した麺、目視で交差する麺、密集した麺です。交差と密集の色は同じ写真の分離部と比較します。密集した領域の色が隠れた麺の重量を表すとは確認できておらず、色からの重量補正は行いません。公式のMobileSAM ViT-T重みを用意できる場合は `--mobile-checkpoint` で抽出を併記できます。 [モデル環境](43_LOCAL_VISION.md)
+
 ## 画像特徴の研究比較
 
 1. OpenCVのHSV、HSV＋Lab、MobileSAMで可視領域を抽出します。SAM 2.1・SAM 3.1を比較する場合は、該当する公式重みを用意します。

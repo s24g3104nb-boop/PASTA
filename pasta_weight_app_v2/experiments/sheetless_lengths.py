@@ -32,7 +32,8 @@ class LineFeatures:
                 self.area_length_px / self.reference_px, self.width_px / self.reference_px)
 
 
-def _reference_length(centerline, envelope_px):
+def projected_reference_length(centerline, envelope_px):
+    """Relative scale proxy from long supported tracks, not a verified strand length."""
     # Use long supported tracks without counting them. A short fragment gives
     # an artificially small denominator and can imitate a large portion.
     minimum = max(32, .70 * envelope_px)
@@ -64,7 +65,7 @@ def measure(rgb):
     # strands merged into the mask than the median of all centerline widths.
     length, width, width_ratio, _, branches = skeleton_measurements(padded, centerline, width_percentile=25)
     envelope = np.sqrt(area / observation.area_over_length_squared)
-    reference = _reference_length(centerline, envelope)
+    reference = projected_reference_length(centerline, envelope)
     reason = ''
     if not reference:
         reason = '麺の長い連続線を確認できない'
