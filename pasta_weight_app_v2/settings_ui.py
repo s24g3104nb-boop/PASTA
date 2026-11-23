@@ -42,6 +42,8 @@ def select_optional_product(products, label, key, preferred):
 
 def open_calibration(product=None):
     """Choose the product from the photo, or an empty form for a demo replacement."""
+    if not st.session_state.get('_app_admin'):
+        return
     ident = product['id'] if product else None
     editor_id = ident if product and not product['name'].startswith('デモ用') else 0
     st.session_state.update(
@@ -56,7 +58,8 @@ def _resume_after_calibration():
 
 
 def render_products():
-    admin = st.session_state.get('_app_admin', False)
+    if not st.session_state.get('_app_admin'):
+        return
     notice = st.session_state.pop('product_saved_notice', None)
     if notice:
         st.success(f'製品データを保存しました。{notice}' if isinstance(notice, str) else '製品データを保存しました。')
@@ -73,7 +76,7 @@ def render_products():
         if st.button('製品情報を読み直す', key='editor_products_retry'):
             st.rerun()
         return
-    mapping = {p['id']: p for p in products_for_edit if admin or not p['name'].startswith('デモ用')}
+    mapping = {p['id']: p for p in products_for_edit}
     next_editor = st.session_state.pop('next_product_editor_id', None)
     if next_editor is not None:
         st.session_state['product_edit_mode'] = next_editor if next_editor in mapping else 0
@@ -98,14 +101,11 @@ def render_products():
             calib_n = st.number_input('乾麺の本数', min_value=1, value=50, step=1)
             calib_w = st.number_input('まとめて量った重さ（g）', min_value=0.0, value=0.0, step=0.1)
             g_per_strand = calib_w / calib_n
-            if admin:
-                st.caption(f'1本あたりの重量：{g_per_strand:.4f} g')
-        elif admin:
+            st.caption(f'1本あたりの重量：{g_per_strand:.4f} g')
+        else:
             g_per_strand = st.number_input('1本あたりの重量（g）', min_value=0.0,
                                            max_value=20.0, value=float(current.get('g_per_strand', 0.0)),
                                            step=0.001, format='%.4f')
-        else:
-            g_per_strand = current.get('g_per_strand', 0.0)
         kc = st.number_input('乾麺100gあたり kcal', min_value=0.0,
                              value=float(current.get('kcal_100', 0.0)), step=1.0)
         pr = st.number_input('乾麺100gあたり たんぱく質（g）', min_value=0.0,

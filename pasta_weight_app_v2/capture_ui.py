@@ -394,7 +394,7 @@ def render_results(request):
         decision, manual = _count_diagnostic(result, product, mode, using_demo)
     except Exception:
         log_error(WEIGHT, '検出本数による重量計算 失敗')
-        st.error('写真の重量を計算できませんでした。写真・設定を見直すか、実測重量を入力してください。')
+        st.error('写真の重量を計算できませんでした。撮り直すか、実測重量を入力してください。')
         recovery(product, rgb, synthetic=using_demo)
         return
     if st.session_state.get('_app_admin'):

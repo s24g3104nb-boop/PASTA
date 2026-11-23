@@ -6,6 +6,7 @@ import streamlit as st
 from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 PAGES = ['ホーム', '記録', '設定']
+COOKING_RECORD = '料理・栄養'
 
 
 def dry_weight_label(row):
@@ -20,8 +21,7 @@ def dry_weight_label(row):
 
 def shell():
     theme=st.session_state.get('theme_preference','端末に合わせる')
-    css=(Path(__file__).parent/'ui'/'design.css').read_text()
-    st.markdown('<style>'+css+'</style>',unsafe_allow_html=True)
+    st.html(Path(__file__).parent / 'ui' / 'design.css')
     mode={'ライト':'light','ダーク':'dark'}.get(theme,'auto')
     st.markdown('<div class="pl-brand pl-theme-'+mode+'"><span aria-hidden="true">≋</span>Pasta Lens<small>ひと皿を、ちょうどよく。</small></div>',unsafe_allow_html=True)
     return st.radio('メインナビゲーション',PAGES,format_func=lambda name: ':material/'+['home','calendar_month','settings'][PAGES.index(name)]+': '+name,horizontal=True,key='main_nav',label_visibility='collapsed',on_change=_nav_changed)
@@ -72,6 +72,7 @@ def persist_appearance():
 
 
 def _nav_changed():
+    st.session_state.pop('cooking_return_draft_id', None)
     st.session_state.pop('calibration_origin', None)
     if st.session_state.get('main_nav') == 'ホーム':
         st.session_state.pop('capture_source', None)

@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, {app_dir!r})
 import numpy as np
 from storage import init_db, list_measurements, save_measurement
-from cooking_ui import render_cooking_tab
+from cooking_ui import render_cooking_page
 db = {db!r}
 init_db(db)
 if not list_measurements(db):
@@ -22,12 +22,12 @@ if not list_measurements(db):
         estimated_g=100, actual_g=100,
         nutrition={{'kcal':350,'protein_g':12,'fat_g':2,'carb_g':70}},
         image_rgb=np.zeros((10,10,3), dtype=np.uint8), db_path=db)
-render_cooking_tab(db)
+render_cooking_page(db)
 '''
     at = AppTest.from_string(script).run(timeout=15)
     assert not at.exception
-    assert at.selectbox[0].value is None
-    at.selectbox[0].set_value(1).run(timeout=15)
+    assert at.selectbox(key='cooking_measurement').value is None
+    at.selectbox(key='cooking_measurement').set_value(1).run(timeout=15)
     assert not at.exception
     rows = [
         {'name': '卵', 'amount_g': 50, 'kcal_100': 140, 'protein_100': 10, 'fat_100': 8, 'carb_100': 0},
@@ -50,8 +50,10 @@ render_cooking_tab(db)
     result = json.loads(serialized)
     assert result['total']['kcal'] == 600
     assert result['portion']['kcal'] == 300
+    at.selectbox(key='cooking_section').set_value('保存した料理・レシピ').run(timeout=15)
+    assert not at.exception
     assert any('保存結果はCG／デモ製品' in item.value for item in at.warning)
-    assert any('実測重量' in item.value and '100.00g' in item.value for item in at.caption)
+    assert any('実測重量' in item.value and '100 g' in item.value for item in at.caption)
 
 
 def test_recipe_template_prefill_confirmation_and_approximation_history(tmp_path):

@@ -30,7 +30,7 @@ def render_manual_weight(product, rgb=None, *, synthetic=False, db_path=DEFAULT_
         st.write(f"たんぱく質 {nutrition['protein_g']:.1f} g / 脂質 {nutrition['fat_g']:.1f} g / 炭水化物 {nutrition['carb_g']:.1f} g")
         if standard_nutrition_used(product):
             st.caption(STANDARD_NUTRITION_NOTE)
-    else:st.info('栄養は未計算です。実製品の栄養情報を登録すると計算できます。')
+    else:st.info('重量は保存できます。この乾麺の栄養は未計算です。')
     if synthetic:st.warning('CG写真を使用した操作確認です。実写の記録ではありません。')
     if st.button('実測重量を履歴に保存',type='primary',width='stretch',key='manual_weight_save',disabled=bool(draft['saved'])):
         try:

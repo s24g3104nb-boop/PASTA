@@ -32,7 +32,7 @@ fixture=save_product('隔離したUI検査用・仮校正',0,350,12,2,70)
 results=[]
 for path,name,known_count in records:
     at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=30).run()
-    at.button(key='home_upload').click().run()
+    at.button(key='home_camera').click().run()
     at.session_state['capture_photo']=BytesIO(path.read_bytes())
     if research_lab:
         def lab_detector(rgb, **opts):

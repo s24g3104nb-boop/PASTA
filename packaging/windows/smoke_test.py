@@ -27,11 +27,9 @@ with tempfile.TemporaryDirectory(prefix='pasta-pack-test-') as temp:
     app.button(key='meal_save').click().run()
     assert not app.exception and entries()[0]['nutrition_snapshot']['kcal']==350
     app.radio(key='main_nav').set_value('設定').run()
-    assert app.get('download_button')
-    app.selectbox(key='settings_section').set_value('開発・検証ツール').run()
-    app.selectbox(key='developer_section').set_value('独立試料・撮影データ登録').run()
-    assert not app.exception and app.button(key='collection_save').disabled
-    from experiments.capture_sheet import render_sheet
-    from experiments.marker_reference import analyze_marker_reference
-    assert analyze_marker_reference(render_sheet())[0]['detected_marker_count']==4
-print('PASS: first launch, 100g manual/no photo, 350kcal, diary, PDF, research registration and synthetic markers')
+    assert app.selectbox(key='appearance') and not app.get('download_button')
+    assert not any(w.key == 'settings_section' for w in app.selectbox)
+    app.radio(key='main_nav').set_value('記録').run()
+    app.selectbox(key='record_kind').set_value('料理・栄養').run()
+    assert not app.exception and app.selectbox(key='cooking_measurement')
+print('PASS: first launch, 100g manual/no photo, 350kcal, diary, public settings and cooking route')

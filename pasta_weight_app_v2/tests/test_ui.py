@@ -41,8 +41,8 @@ assert not at.checkbox(key='override_count').value
 assert any(m.value == '16.0 g' for m in at.metric)
 next(b for b in at.button if b.label == '履歴に保存').click().run()
 assert not at.exception, at.exception
-at.radio(key='main_nav').set_value('設定').run()
-at.selectbox(key='settings_section').set_value('料理の栄養計算').run()
+at.radio(key='main_nav').set_value('記録').run()
+at.selectbox(key='record_kind').set_value('料理・栄養').run()
 assert at.selectbox(key='cooking_measurement').options[0] == '履歴を選択してください'
 from storage import list_measurements
 rows = list_measurements()

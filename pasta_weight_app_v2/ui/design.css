@@ -22,8 +22,6 @@ p,label,li {line-height:1.65;} [data-testid="stCaptionContainer"] {color:var(--p
 .st-key-home_meal button {background:var(--pl-sage)!important;}
 .pl-empty {background:var(--pl-card);border:1px solid var(--pl-line);border-radius:var(--pl-radius);padding:28px;text-align:center;color:var(--pl-muted);}
 .pl-empty strong {display:block;color:var(--pl-text);font-size:17px;margin:8px 0;}
-.pl-tip {background:var(--pl-orange-soft);border-radius:20px;padding:20px 24px;margin:12px 0;color:var(--pl-text);}
-.pl-tip b {color:var(--pl-orange);}
 [data-testid="stVerticalBlockBorderWrapper"]>div {border-color:var(--pl-line)!important;border-radius:var(--pl-radius)!important;}
 [data-testid="stVerticalBlockBorderWrapper"] {background:var(--pl-card);border-radius:var(--pl-radius);box-shadow:var(--pl-shadow);}
 [data-testid="stMetric"] {background:var(--pl-card);padding:18px;border:1px solid var(--pl-line);border-radius:20px;}

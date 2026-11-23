@@ -13,7 +13,7 @@ from cooking_storage import list_cooking_sessions
 from meal_diary import delete, entries, get, photo_path, save
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
-from ui_shell import dry_weight_label
+from ui_shell import COOKING_RECORD, dry_weight_label
 from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 from operation_logs import RECORDS, log_error
@@ -58,15 +58,20 @@ def _route_diary():
     st.session_state.record_kind = '食事日記'
 
 
-def start_diary(measurement_id=None, cooking_session_id=None, day=None, confirmed_dish=None):
+def start_diary(measurement_id=None, cooking_session_id=None, day=None, confirmed_dish=None,
+                *, from_cooking=False):
     """Navigation callback: resume an unsaved draft, or start a contextual meal."""
     drafts = _drafts()
     active = drafts.get(st.session_state.get('diary_active_draft'))
-    returning = st.session_state.pop('cooking_return_diary', False)
-    if returning and active and not active['saved']:
-        active['measurement_id'] = measurement_id
-        active['cooking_session_id'] = cooking_session_id
-        _activate(active)
+    return_id = st.session_state.pop('cooking_return_draft_id', None)
+    returning = drafts.get(return_id) if from_cooking else None
+    if returning and not returning['saved']:
+        returning['measurement_id'] = measurement_id
+        returning['cooking_session_id'] = cooking_session_id
+        # Switching a saved calculation must refresh any widgets from the old draft.
+        for field in ('measurement_id', 'cooking_session_id'):
+            st.session_state.pop('meal_' + field + '_' + returning['id'], None)
+        _activate(returning)
     elif measurement_id is not None or cooking_session_id is not None or day is not None:
         matching = next((d for d in drafts.values() if not d['saved'] and not d['edit']
                          and d['measurement_id'] == measurement_id
@@ -215,14 +220,24 @@ def _nutrition(row, *, detailed=False):
 
 def _go_cooking(draft):
     _activate(draft)
-    st.session_state.cooking_return_diary = True
+    st.session_state.cooking_return_draft_id = draft['id']
     st.session_state.cooking_source_measurement_id = draft.get('measurement_id')
     from dish_classifier import DISH_NAMES
     st.session_state['cooking_incoming_dish'] = draft['dish_name'] if draft['dish_name'] in DISH_NAMES else None
     st.session_state['cooking_classified_dish'] = draft['dish_name'] if draft.get('photo_name_confirmed') else None
     st.session_state.main_nav = '記録'
-    st.session_state.record_kind = '食事日記'
-    st.session_state.diary_screen = 'cooking'
+    st.session_state.record_kind = COOKING_RECORD
+    st.session_state.cooking_section = '料理を作る'
+
+
+def render_return_to_meal():
+    draft = _drafts().get(st.session_state.get('cooking_return_draft_id'))
+    if draft and not draft['saved']:
+        def back():
+            st.session_state.pop('cooking_return_draft_id', None)
+            _activate(draft)
+            _route_diary()
+        st.button('食事記録の入力に戻る', on_click=back, key='back_to_meal_draft')
 
 
 def _link_options(draft, db_path):

@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 
-def test_registration_recalibration_and_saved_receipt(tmp_path):
+def test_public_reads_existing_calibration_and_preserves_saved_receipt(tmp_path):
     script = r'''
 import sys
 from io import BytesIO
@@ -16,7 +16,7 @@ from PIL import Image
 import numpy as np
 at=AppTest.from_file('pasta_weight_app_v2/app.py',default_timeout=25).run()
 p=save_product('最初の製品',.68,350,12,2,70)
-at.button(key='home_upload').click().run()
+at.button(key='home_camera').click().run()
 rgb=np.full((480,640,3),42,np.uint8)
 for i in range(6):rgb[90+i*40:94+i*40,100:530]=(220,180,40)
 b=BytesIO();Image.fromarray(rgb).save(b,'PNG')
@@ -44,14 +44,9 @@ at.session_state['capture_photo']=b
 at.run()
 assert any(m.value=='5.9 g' for m in at.metric)
 at.radio(key='main_nav').set_value('設定').run()
-at.selectbox(key='settings_section').set_value('製品・校正').run()
-at.selectbox(key='product_edit_mode').set_value(0).run()
-assert not any(w.label=='1本あたりの重量（g）' for w in at.number_input)
-at.checkbox(key='calibrate_from_units_0').check().run()
-next(w for w in at.text_input if w.label=='製品名').set_value('新しい製品')
-next(w for w in at.number_input if w.label=='まとめて量った重さ（g）').set_value(37.5)
-next(w for w in at.button if w.label=='製品データを保存').click().run()
-at.button(key='calibration_return').click().run()
+assert not any(w.key == 'product_edit_mode' for w in at.selectbox)
+at.radio(key='main_nav').set_value('ホーム').run()
+at.button(key='home_resume_capture').click().run()
 assert not at.exception,at.exception
 # Returning to an explicit existing measurement preserves its product selection.
 assert at.selectbox(key='which_product').value == p['id']

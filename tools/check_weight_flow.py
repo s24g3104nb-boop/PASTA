@@ -160,7 +160,24 @@ def fill_product(page, name, grams, *, new=False):
     page.get_by_text(re.compile('製品データを保存しました')).wait_for()
 
 
-def run_checks(browser, url, work, output, baseline):
+def change_fixture_product(source, app_python, work, name, grams):
+    """Modify only this browser run's temporary DB through the storage API."""
+    subprocess.run([app_python, '-c',
+                    'import sys\nfrom storage import list_products,save_product\n'
+                    'name, grams = sys.argv[1:]\n'
+                    'row = next((row for row in list_products() if row["name"] == name), None)\n'
+                    'save_product(name, float(grams), 350, 12, 2, 70, product_id=row["id"] if row else None)\n',
+                    name, str(grams)], cwd=source/'pasta_weight_app_v2',
+                   env=dict(os.environ, PASTA_DATA_DIR=str(work/'data')), check=True)
+
+
+def resume_photo(page):
+    navigate(page, '記録')
+    navigate(page, 'ホーム')
+    button(page, 'home_resume_capture').click()
+
+
+def run_checks(browser, url, work, output, baseline, source, app_python):
     results = []
     cases = [
         ('calibrated', 'spread.png', CALIBRATED, '8.2 g'),
@@ -185,27 +202,27 @@ def run_checks(browser, url, work, output, baseline):
                 assert observed is None, 'real upload with demo product yielded a weight'
                 if baseline:
                     button(page, 'recovery_calibration').click()
+                    fill_product(page, NEW, .68, new=True)
+                    button(page, 'calibration_return').click()
                 else:
-                    navigate(page, '設定')
-                    choose(page, 'settings_section', '製品・校正')
-                fill_product(page, NEW, .68, new=True)
-                button(page, 'calibration_return').click()
-                if not baseline:
+                    change_fixture_product(source, app_python, work, NEW, .68)
+                    resume_photo(page)
                     choose(page, 'which_product', NEW)
                 observed = read_result(page, expected)
             elif case == 'recalibrate':
                 assert observed == '8.2 g'
-                editor = browser.new_page(viewport=dict(width=1280, height=900))
-                try:
-                    editor.goto(url)
-                    navigate(editor, '設定')
-                    choose(editor, 'settings_section', '製品・校正')
-                    fill_product(editor, UPDATED, .75)
-                finally:
-                    editor.close()
-                navigate(page, '記録')
-                navigate(page, 'ホーム')
-                button(page, 'home_resume_capture').click()
+                if baseline:
+                    editor = browser.new_page(viewport=dict(width=1280, height=900))
+                    try:
+                        editor.goto(url)
+                        navigate(editor, '設定')
+                        choose(editor, 'settings_section', '製品・校正')
+                        fill_product(editor, UPDATED, .75)
+                    finally:
+                        editor.close()
+                else:
+                    change_fixture_product(source, app_python, work, UPDATED, .75)
+                resume_photo(page)
                 observed = read_result(page, expected)
             check['observed'] = observed
             check['messages'] = page.get_by_test_id('stAlert').all_inner_texts()
@@ -259,7 +276,8 @@ def main():
         with test_server(args.source.resolve(), args.app_python.absolute(), work, output) as url, sync_playwright() as pw:
             browser = pw.chromium.launch(executable_path=shutil.which('chromium'), args=['--disable-dev-shm-usage'])
             try:
-                results = run_checks(browser, url, work, output, args.baseline)
+                results = run_checks(browser, url, work, output, args.baseline,
+                                     args.source.resolve(), args.app_python.absolute())
             finally:
                 browser.close()
     (output / 'results.json').write_text(json.dumps(dict(synthetic_fixtures=True, physical_device=False,

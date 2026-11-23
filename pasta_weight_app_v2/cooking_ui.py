@@ -13,7 +13,7 @@ from dish_classifier import DISH_NAMES, INGREDIENT_HINTS
 from standard_recipes import recipe_choices
 from storage import DEFAULT_DB, list_measurements
 from ingredient_ui import render_ingredients
-from ui_shell import dry_weight_label
+from ui_shell import dry_weight_label, start_capture
 
 
 def _diary_link(session, key):
@@ -21,7 +21,8 @@ def _diary_link(session, key):
     st.button('この料理を食事日記に記録する', key=key,
               on_click=start_diary,
               kwargs={'measurement_id': session['measurement_id'],
-                      'cooking_session_id': session['id'], 'confirmed_dish': session.get('selected_dish')}, width='stretch')
+                      'cooking_session_id': session['id'], 'confirmed_dish': session.get('selected_dish'),
+                      'from_cooking': True}, width='stretch')
 
 
 def _restore_controls():
@@ -53,12 +54,12 @@ def _remember_controls():
 def render_cooking_tab(db_path=DEFAULT_DB):
     _restore_controls()
     st.subheader('まず、乾麺の記録を選ぼう')
-    st.warning('写真から材料の使用量や正確な総カロリーは分かりません。'
-               '使った乾麺の履歴と、ソース・油・具材・調味料の実際の使用量を確認してください。')
     measurements = [row for row in list_measurements(db_path)
                     if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic']
     if not measurements:
-        st.info('先にホームで、この料理に使用する乾麺の測定結果を保存してください。')
+        st.caption('使った乾麺の重さを保存すると、栄養を計算できます。')
+        st.button('乾麺を撮影する', type='primary', width='stretch', key='cooking_capture',
+                  on_click=start_capture, args=('写真をアップロード',))
         return
     mapping = {item['id']: item for item in measurements}
     if st.session_state.get('cooking_measurement') not in mapping:
@@ -97,8 +98,7 @@ def render_cooking_tab(db_path=DEFAULT_DB):
     hints = INGREDIENT_HINTS.get(selected_dish, ())
     if hints:
         st.caption('材料確認のヒント: ' + '、'.join(hints) + '。実際に使ったものだけを入力してください。')
-    st.caption('標準量を勝手に補いません。商品ラベル等の100gあたり栄養値と使用gを入力してください。'
-               '「卵1個」等は食べる部分のgに換算し、値が不明な行を0で埋めないでください。')
+    st.caption('写真から材料の分量は分かりません。実際に使った量（g）を入力してください。')
     templates = {item['id']: item for item in list_recipe_templates(db_path)
                  if item['selected_dish'] == selected_dish}
     all_templates = {**templates, **recipe_choices(selected_dish)}
@@ -208,7 +208,6 @@ def render_cooking_tab(db_path=DEFAULT_DB):
             st.error(f'計算・保存できませんでした: {exc}')
         except sqlite3.Error:
             st.error('料理を保存できませんでした。入力内容を保持しています。保存先を確認し、もう一度お試しください。')
-    sessions = [r for r in list_cooking_sessions(db_path) if st.session_state.get('_app_admin') or r['dry_snapshot'].get('source_kind') != 'synthetic']
     if templates:
         with st.expander('利用者レシピテンプレートの削除'):
             delete_id = st.selectbox('削除するテンプレート', list(templates),
@@ -217,22 +216,6 @@ def render_cooking_tab(db_path=DEFAULT_DB):
             if st.button('テンプレートを削除', disabled=not confirm_delete):
                 delete_recipe_template(delete_id, db_path=db_path)
                 st.rerun()
-    if sessions:
-        with st.expander('保存した料理の計算履歴'):
-            for session in sessions[:20]:
-                st.write(f"ID {session['id']} / {session['selected_dish']} / "
-                         f"乾麺履歴ID {session['measurement_id']} / {session['created_at']}")
-                if session['duplicate_measurement_count'] > 1:
-                    st.warning('旧データで同じ乾麺履歴が複数料理に登録されています。合計栄養を集計する際は二重計上に注意してください。')
-                past = session['dry_snapshot']
-                if past.get('source_kind') == 'synthetic' or past['product_name'].startswith('デモ用'):
-                    st.warning('この保存結果はCG／デモ製品に基づくデモ計算です。実際の料理の栄養値ではありません。')
-                elif past.get('source_kind', 'unknown') == 'unknown':
-                    st.warning('この保存結果の元画像は来歴不明です。実写か確認されていません。')
-                past_source = '実測重量' if past['weight_source'] == 'actual' else '推定重量（実測なし）'
-                st.caption(f"乾麺 {past['dry_weight_g']:.2f}g / {past_source} / {past['nutrition_source']}")
-                _show_result(session['calculation'])
-                _diary_link(session, f"cooking_history_to_diary_{session['id']}")
     _remember_controls()
 
 
@@ -263,8 +246,14 @@ def _show_result(result):
 def render_cooking_page(db_path=DEFAULT_DB):
     section=st.selectbox('料理メニュー',['料理を作る','保存した料理・レシピ'],key='cooking_section')
     if section=='料理を作る':
-        render_cooking_tab(db_path)
-        return
+        with st.container(key='cooking_create'):
+            render_cooking_tab(db_path)
+    else:
+        with st.container(key='cooking_saved'):
+            _render_saved_cooking(db_path)
+
+
+def _render_saved_cooking(db_path):
     from ui_shell import empty_state
     sessions = [r for r in list_cooking_sessions(db_path) if st.session_state.get('_app_admin') or r['dry_snapshot'].get('source_kind') != 'synthetic']
     templates=list_recipe_templates(db_path)
@@ -274,7 +263,15 @@ def render_cooking_page(db_path=DEFAULT_DB):
         with st.container(border=True):
             st.subheader(session['selected_dish'])
             st.caption(session['created_at'])
-            if session['dry_snapshot'].get('source_kind')!='real':st.caption('CG・デモ / 来歴未確認の計算')
+            snapshot = session['dry_snapshot']
+            if snapshot.get('source_kind') == 'synthetic' or snapshot['product_name'].startswith('デモ用'):
+                st.warning('この保存結果はCG／デモ製品に基づく計算です。')
+            elif snapshot.get('source_kind') != 'real':
+                st.caption('元の写真の来歴は未確認です。')
+            if session['duplicate_measurement_count'] > 1:
+                st.warning('同じ乾麺の記録を使った料理が複数あります。')
+            source = '実測重量' if snapshot['weight_source'] == 'actual' else '推定重量'
+            st.caption(f"乾麺 {snapshot['dry_weight_g']:g} g · {source} · {snapshot['nutrition_source']}")
             with st.expander('栄養と計算の内訳'):_show_result(session['calculation'])
             _diary_link(session, f"cooking_card_to_diary_{session['id']}")
     for template in templates:

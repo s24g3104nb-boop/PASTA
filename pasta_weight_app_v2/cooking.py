@@ -70,7 +70,7 @@ def dry_snapshot(record: Mapping) -> dict:
                             else '計測時に保存した製品の100g栄養値')
     else:
         if any(record.get(key) is None for key in NUTRIENT_KEYS):
-            raise ValueError('この乾麺は栄養未計算です。製品の栄養情報を登録した新しい測定記録を選ぶか、栄養未計算のまま食事日記に保存してください。')
+            raise ValueError('この乾麺は栄養未計算です。栄養値のある乾麺の記録を選ぶか、重量だけで食事日記に保存できます。')
         nutrition = {key: nonnegative(record.get(key), f'乾麺の{key}') * weight / (weight if manual else estimated)
                      for key in NUTRIENT_KEYS}
         nutrition_source = '旧履歴の保存済み乾麺栄養値を重量比で補正（丸め誤差あり）'

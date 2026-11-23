@@ -68,7 +68,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
             c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
             c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
     else:
-        st.info('栄養は未計算です。製品の栄養情報を登録すると計算できます。重量だけでも保存できます。')
+        st.info('重量は保存できます。この乾麺の栄養は未計算です。')
     st.caption(f'使用製品：{product["name"]}')
     if nutrit is not None:
         st.caption(f'{"実測重量" if actual is not None else "推定重量"}から計算した乾麺分です。')

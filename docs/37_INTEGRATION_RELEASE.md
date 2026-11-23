@@ -63,7 +63,7 @@ Python 3.12で、ルートのsetup_windows.bat→start_windows.bat。専用.venv
 | ホーム→撮影→結果 | 写真解析、推定結果、実測入力、保存 | measurements、photos、製品スナップショット |
 | ホームの補助操作 | 写真なしの実測重量 | measurements（estimated_g=NULL、manual_weight） |
 | 記録→食事日記 | 写真/日時/料理名/メモ、カレンダー、検索、編集・削除 | meal_entries、meal_photos、測定・栄養スナップショット |
-| 設定→料理の栄養計算 | 乾麺と材料・取り分けの計算 | cooking_sessions、cooking_ingredients、recipe_templates |
+| 記録→料理・栄養 | 乾麺と材料・取り分けの計算 | cooking_sessions、cooking_ingredients、recipe_templates |
 | 設定→開発・検証 | 未承認写真/QC/試料関係/A4ガイド | 別のresearch_collection DB・原本・プレビュー |
 
 ```mermaid

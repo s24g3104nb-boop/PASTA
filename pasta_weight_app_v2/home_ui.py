@@ -21,11 +21,8 @@ def render_home():
     if st.session_state.get('capture_photo') is not None or st.session_state.get('result_request'):
         st.button('途中の測定を再開する', key='home_resume_capture', width='stretch', on_click=resume_capture)
     with st.expander('カメラを開く・はかりの数値を記録する'):
-        st.button('撮影済みの写真から選ぶ', icon=':material/photo_library:', width='stretch',
-                  on_click=start_capture, args=('写真をアップロード',), key='home_upload')
         st.button('ブラウザでカメラを開く', icon=':material/photo_camera:', width='stretch',
                   on_click=start_capture, args=('スマホで撮影',), key='home_camera_direct')
-        st.caption('電子はかりで測った重さは、写真なしでも保存できます。画像からの推定は行いません。')
         st.button('写真なしで実測重量を記録する', key='home_manual_weight', width='stretch', on_click=start_manual_weight)
     if st.session_state.get('_app_admin'):
         with st.expander('サンプルで操作を確認する'):
@@ -62,4 +59,3 @@ def render_home():
             st.button('記録を見る', key='recent_' + row['id'], on_click=open_diary_entry, args=(row['id'],))
     if rows:
         st.button('すべての食事記録を見る', on_click=lambda: st.session_state.update(main_nav='記録', record_kind='食事日記', diary_screen='list'), key='home_history', width='stretch')
-    st.markdown('<aside class="pl-tip"><b>きれいに撮るコツ</b><br>乾麺は無地の背景で、全体が写るように。広げて撮るときは、1本ずつ離しましょう。</aside>', unsafe_allow_html=True)
