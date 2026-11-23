@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 import sqlite3
@@ -11,6 +12,8 @@ import streamlit as st
 
 from cooking_storage import list_cooking_sessions
 from meal_diary import delete, entries, get, photo_path, save
+from meal_photos import prepare_photo
+from finished_recipe_ui import begin_recipe, render_finished_recipe, show_nutrients
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
 from ui_shell import COOKING_RECORD, dry_weight_label
@@ -68,6 +71,8 @@ def start_diary(measurement_id=None, cooking_session_id=None, day=None, confirme
     if returning and not returning['saved']:
         returning['measurement_id'] = measurement_id
         returning['cooking_session_id'] = cooking_session_id
+        if cooking_session_id is not None:
+            returning.pop('finished_recipe', None)
         # Switching a saved calculation must refresh any widgets from the old draft.
         for field in ('measurement_id', 'cooking_session_id'):
             st.session_state.pop('meal_' + field + '_' + returning['id'], None)
@@ -108,6 +113,16 @@ def _edit_entry(row):
         'cooking_session_id': row.get('cooking_session_id'),
         'expected_updated_at': row['updated_at'],
     })
+    calculation = (row['nutrition_snapshot'] or {}).get('calculation', {})
+    recipe = deepcopy(calculation.get('recipe_input'))
+    if recipe is not None:
+        draft['finished_recipe'] = recipe
+        draft['original_recipe'] = deepcopy(recipe)
+        draft['original_measurement_id'] = draft['measurement_id']
+        draft['original_measurement_snapshot'] = row['measurement_snapshot']
+        draft['recipe_weight'] = calculation['dry_weight_g']
+        draft['recipe_confirmed_basis'] = (draft['measurement_id'], draft['recipe_weight'],
+                                          deepcopy(recipe['ingredients']))
     _activate(draft)
 
 
@@ -136,11 +151,18 @@ def _field(widget, label, draft, field, **kwargs):
                   args=(draft['id'], field, key), **kwargs)
 
 
+def _reset_photo_analysis(draft):
+    for field in ('photo_suggestion', 'photo_analyzed', 'photo_analysis_failed',
+                  'photo_analysis_unavailable', 'photo_rgb'):
+        draft.pop(field, None)
+    draft['photo_name_confirmed'] = False
+    st.session_state.pop('meal_dish_candidate_'+draft['id'], None)
+
+
 def _upload_changed(draft_id, key):
     uploaded = st.session_state.get(key)
     draft = _drafts()[draft_id]
-    draft.pop('photo_suggestion', None)
-    draft['photo_name_confirmed'] = False
+    _reset_photo_analysis(draft)
     if uploaded is not None:
         draft['photo_bytes'] = uploaded.getvalue()
         draft['photo_name'] = uploaded.name
@@ -151,8 +173,7 @@ def _upload_changed(draft_id, key):
 
 def _clear_photo(draft_id):
     draft = _drafts()[draft_id]
-    draft.pop('photo_suggestion', None)
-    draft['photo_name_confirmed'] = False
+    _reset_photo_analysis(draft)
     draft['photo_bytes'] = None
     draft['photo_name'] = None
     draft['remove_photo'] = True
@@ -214,8 +235,21 @@ def _nutrition(row, *, detailed=False):
             st.caption(source)
         if status == 'dry_only':
             st.info('乾麺分だけの栄養です。ソースや具材は含まれません。')
+        calculation = snapshot.get('calculation', {})
+        recipe = calculation.get('recipe_input')
+        if recipe:
+            if calculation['dry_weight_source'] == 'reference':
+                st.caption(f"乾麺の参考重量 {calculation['dry_weight_g']:g} g")
+            st.caption('材料と分量を確認済み' if recipe['ingredients_confirmed'] else '材料と分量は未確認')
+            with st.expander('料理全体の栄養と材料'):
+                show_nutrients('料理全体', calculation['total'])
+                st.caption(calculation['dry_nutrition_source'])
+                st.caption(calculation['recipe_source'])
+                for item, origin in zip(calculation['ingredients'], calculation['ingredient_origins']):
+                    basis = '標準レシピの参考値' if origin == 'standard_recipe' else '手入力'
+                    st.write(f"{item['name']} · {item['amount_g']:g} g · {basis}")
         if status == 'template_estimate':
-            st.info('参考レシピの分量を前提とした概算です。写真から計算した値ではありません。')
+            st.caption('参考重量や標準レシピを含む場合は概算です。')
 
 
 def _go_cooking(draft):
@@ -311,25 +345,57 @@ def _render_editor(db_path):
                   on_click=open_diary_entry, args=(draft['id'],), width='stretch')
         st.button('別の食事を記録する', key='meal_start_another', on_click=start_diary, width='stretch')
         return
+    mode = st.radio('写真の追加方法', ['アップロード', 'カメラ'], horizontal=True,
+                    key='meal_photo_mode_'+draft['id'])
     upload_key = f"meal_photo_{draft['id']}_{draft.get('upload_generation', 0)}"
-    st.file_uploader('完成料理の写真（任意）', type=['jpg', 'jpeg', 'png'], key=upload_key,
-                     on_change=_upload_changed, args=(draft['id'], upload_key),
-                     help='スマートフォンのカメラで撮影した写真も選べます。')
+    if mode == 'カメラ':
+        upload_key += '_camera'
+        st.camera_input('完成料理を撮影', key=upload_key, on_change=_upload_changed,
+                        args=(draft['id'], upload_key))
+    else:
+        st.file_uploader('完成料理の写真（任意）', type=['jpg', 'jpeg', 'png', 'webp'], key=upload_key,
+                         on_change=_upload_changed, args=(draft['id'], upload_key))
     valid_photo = True
+    rgb = None
     if draft['photo_bytes'] is not None:
         try:
-            rgb = image_to_rgb(BytesIO(draft['photo_bytes']))
+            if 'photo_rgb' not in draft:
+                prepared = prepare_photo(draft['photo_bytes'])
+                draft['photo_rgb'] = image_to_rgb(BytesIO(prepared.content))
+            rgb = draft['photo_rgb']
             st.image(rgb, width='stretch')
-            from dish_vision_ui import render_dish_suggestion
-            render_dish_suggestion(rgb, draft)
-            st.caption('選択中：' + (draft['photo_name'] or '料理写真'))
         except (ValueError, OSError):
             valid_photo = False
-            st.error('写真を読み込めませんでした。JPEG または PNG の写真を選び直してください。')
+            st.error('写真を読み込めませんでした。JPEG・PNG・WebPの写真を選び直してください。')
     elif draft['photo'] and not draft['remove_photo']:
         _photo(draft, db_path, preview=True)
     if draft['photo_bytes'] is not None or (draft['photo'] and not draft['remove_photo']):
         st.button('写真を外す', key='meal_remove_photo', on_click=_clear_photo, args=(draft['id'],))
+
+    from dish_vision_ui import render_dish_choice
+
+    valid_recipe = True
+    selected_dish = render_dish_choice(rgb, draft)
+    try:
+        if selected_dish or draft.get('finished_recipe'):
+            measurements = {row['id']: row for row in list_measurements(db_path)
+                            if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic'}
+            original = draft.get('original_measurement_snapshot')
+            if original is not None:
+                measurements[original['id']] = original
+            if selected_dish and selected_dish != draft.get('finished_recipe', {}).get('dish'):
+                if draft.get('finished_recipe'):
+                    st.caption('標準レシピを切り替えると、材料と分量は新しい参考値になります。')
+                if st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch'):
+                    begin_recipe(draft, selected_dish, measurements)
+                    draft['dish_name'] = selected_dish
+                    draft['photo_name_confirmed'] = selected_dish == getattr(draft.get('photo_suggestion'), 'name', None)
+                    st.session_state.pop('meal_dish_name_'+draft['id'], None)
+            if draft.get('finished_recipe'):
+                valid_recipe = render_finished_recipe(draft, measurements)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        valid_recipe = not draft.get('finished_recipe')
+        st.warning(str(exc) if isinstance(exc, ValueError) else '乾麺の記録を開けませんでした。')
     _field(st.text_input, '料理名', draft, 'dish_name', placeholder='例：トマトのパスタ', max_chars=120)
     _field(st.date_input, '食べた日', draft, 'eaten_date', min_value=date(1900, 1, 1),
            max_value=date(2100, 12, 31), format='YYYY/MM/DD')
@@ -339,19 +405,24 @@ def _render_editor(db_path):
     _field(st.selectbox, '食事の区分（任意）', draft, 'meal_type', options=MEAL_TYPES,
            format_func=lambda value: value or '指定しない')
     _field(st.text_area, 'ひとこと（任意）', draft, 'memo', max_chars=2000)
-    try:
-        _link_options(draft, db_path)
-    except (sqlite3.Error, OSError, ValueError):
-        st.warning('関連する記録を読み込めません。接続先の保存領域を確認して、もう一度お試しください。')
-    st.caption('ソースや具材を含めて計算するときは、使った材料と分量を確認してください。')
-    if st.button('食事記録を保存', key='meal_save', type='primary', width='stretch', disabled=not valid_photo):
+    if not draft.get('finished_recipe'):
         try:
+            _link_options(draft, db_path)
+        except (sqlite3.Error, OSError, ValueError):
+            st.warning('関連する記録を読み込めません。もう一度お試しください。')
+    if st.button('食事記録を保存', key='meal_save', type='primary', width='stretch',
+                 disabled=not (valid_photo and valid_recipe)):
+        try:
+            recipe = draft.get('finished_recipe')
+            if draft.get('original_recipe') == recipe and draft.get('original_measurement_id') == draft['measurement_id']:
+                recipe = None
             with st.spinner('食事記録を保存しています…'):
                 saved = save(draft['id'], draft['eaten_date'], draft['eaten_time'] if draft['time_known'] else None,
                              draft['dish_name'], draft['memo'], draft['photo_bytes'], db_path,
                              meal_type=draft['meal_type'], measurement_id=draft['measurement_id'],
                              cooking_session_id=draft['cooking_session_id'], edit=draft['edit'],
-                             expected_updated_at=draft['expected_updated_at'], remove_photo=draft['remove_photo'])
+                             expected_updated_at=draft['expected_updated_at'], remove_photo=draft['remove_photo'],
+                             finished_recipe=recipe)
             draft['saved'] = True
             draft['expected_updated_at'] = saved['updated_at']
             st.session_state.diary_notice = '食事記録を保存しました。'
@@ -387,8 +458,9 @@ def _render_detail(rows, db_path):
         if row.get('source_kind') == 'synthetic' and not row.get('measurement_snapshot'):
             st.warning('デモ用の記録です。')
     st.button('記録を編集する', key='meal_edit', on_click=_edit_entry, args=(row,), width='stretch')
+    recipe = (row.get('nutrition_snapshot') or {}).get('calculation', {}).get('recipe_input')
     st.button('栄養計算を追加・変更する', key='meal_detail_cooking', width='stretch',
-              on_click=_detail_to_cooking, args=(row,))
+              on_click=_edit_entry if recipe else _detail_to_cooking, args=(row,))
     st.button('別の食事を記録する', key='meal_detail_new', on_click=start_diary, width='stretch')
     with st.expander('この記録を削除する', expanded=bool(st.session_state.get('meal_delete_confirm_' + row['id'], False))):
         confirmed = st.checkbox('この食事記録を一覧から削除する', key='meal_delete_confirm_' + row['id'])

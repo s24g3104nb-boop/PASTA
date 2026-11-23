@@ -7,6 +7,11 @@ import cv2
 import numpy as np
 from PIL import Image
 
+if __package__:
+    from .dish_classifier import LinearDishHead
+else:
+    from dish_classifier import LinearDishHead
+
 MODEL = 'ViT-B-32-quickgelu'
 CHECKPOINT_SHA256 = '46683a32721d5c68911153698992361285d20ca690bb4f317c11e45c03d798fa'
 DISH_PROMPTS = {
@@ -85,8 +90,9 @@ class OpenClipVision:
 
 
 class LocalDishClassifier(OpenClipVision):
-    def __init__(self, checkpoint, device='cpu'):
+    def __init__(self, checkpoint, device='cpu', *, head_path=None):
         super().__init__(checkpoint, device)
+        self.head = LinearDishHead.load(head_path, CHECKPOINT_SHA256) if head_path else None
         import open_clip
 
         prompts = [text for group in (*DISH_PROMPTS.values(), *INGREDIENT_PROMPTS.values()) for text in group]
@@ -94,7 +100,7 @@ class LocalDishClassifier(OpenClipVision):
             tokens = open_clip.get_tokenizer(MODEL)(prompts).to(device)
             self.text = self.model.encode_text(tokens, normalize=True)
 
-    def predict(self, rgb):
+    def image_evidence(self, rgb):
         with self.torch.inference_mode():
             visual = self.encode(Image.fromarray(rgb))
             scores = (visual @ self.text.T)[0].float().cpu().numpy()
@@ -110,4 +116,12 @@ class LocalDishClassifier(OpenClipVision):
         for label in INGREDIENT_PROMPTS:
             ingredients[label] = tuple(scores[cursor:cursor+2])
             cursor += 2
-        return suggest_from_scores(dishes, ingredients, color_note(rgb))
+        return visual[0].float().cpu().numpy(), suggest_from_scores(dishes, ingredients, color_note(rgb))
+
+    def predict(self, rgb):
+        embedding, suggestion = self.image_evidence(rgb)
+        if self.head is None:
+            return suggestion
+        name = self.head.select(embedding, suggestion.name)
+        return Suggestion(name, suggestion.visible_options if name else (), suggestion.color_note,
+                          'OpenCLIP ViT-B/32 + supervised linear head')

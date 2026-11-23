@@ -1,54 +1,57 @@
-"""Optional local recognition in the meal draft."""
+"""Photo recognition suggestions for the three editable standard recipes."""
 import os
 from pathlib import Path
 
 import streamlit as st
-from local_dish_vision import DISH_PROMPTS, LocalDishClassifier, color_note
 
-CHOICES = [name for name in DISH_PROMPTS if name != 'その他']
+from dish_classifier import STANDARD_DISH_NAMES
+from local_dish_vision import LocalDishClassifier
+from operation_logs import RECORDS, log_error
 
 
 @st.cache_resource
-def _classifier(path, size, mtime_ns, device):
-    return LocalDishClassifier(path, device)
+def _classifier(checkpoint, head, device):
+    return LocalDishClassifier(checkpoint[0], device, head_path=head[0] if head else None)
 
 
-def _use_name(draft):
-    selection = st.session_state['meal_dish_candidate_'+draft['id']]
-    draft['dish_name'] = selection
-    draft['photo_name_confirmed'] = selection == getattr(draft.get('photo_suggestion'), 'name', None)
-    st.session_state['meal_dish_name_'+draft['id']] = selection
+def _signature(config_path):
+    path = Path(config_path).resolve(strict=True)
+    stat = path.stat()
+    return str(path), stat.st_size, stat.st_mtime_ns
 
 
-def render_dish_suggestion(rgb, draft):
-    st.caption('料理写真から料理名と見えている具材の候補を探せます。材料の量は自分で確認してください。')
-    model_path = os.environ.get('PASTA_OPENCLIP_CHECKPOINT')
-    if model_path and st.button('写真から料理の候補を探す', key='dish_analyze_'+draft['id'], width='stretch'):
-        try:
-            path = Path(model_path).resolve()
-            stat = path.stat()
-            with st.spinner('このPCで料理の候補を調べています…'):
-                model = _classifier(str(path), stat.st_size, stat.st_mtime_ns, os.environ.get('PASTA_LOCAL_VISION_DEVICE', 'cpu'))
-                draft['photo_suggestion'] = model.predict(rgb)
-                draft['photo_name_confirmed'] = False
-        except (OSError, ValueError, ImportError, RuntimeError):
-            draft.pop('photo_suggestion', None)
-            st.warning('写真から候補を取得できませんでした。料理名を下から選べます。')
+def render_dish_choice(rgb, draft):
+    candidate_key = 'meal_dish_candidate_'+draft['id']
+    if rgb is not None and not draft.get('photo_analyzed'):
+        draft['photo_analyzed'] = True
+        model_path = os.environ.get('PASTA_OPENCLIP_CHECKPOINT')
+        head_path = os.environ.get('PASTA_DISH_HEAD_PATH')
+        if model_path:
+            try:
+                with st.spinner('この端末で料理の候補を調べています…'):
+                    model = _classifier(_signature(model_path), _signature(head_path) if head_path else None,
+                                        os.environ.get('PASTA_LOCAL_VISION_DEVICE', 'cpu'))
+                    draft['photo_suggestion'] = model.predict(rgb)
+            except (OSError, ValueError, ImportError, RuntimeError):
+                log_error(RECORDS, '完成料理の画像認識 失敗')
+                draft['photo_analysis_failed'] = True
+        else:
+            draft['photo_analysis_unavailable'] = True
     suggestion = draft.get('photo_suggestion')
-    if suggestion and suggestion.name:
-        st.info(suggestion.name+'の可能性があります。写真と材料を確認して、料理名を選んでください。')
-        if suggestion.visible_options:
-            st.caption('見えている具材の候補 · '+'、'.join(suggestion.visible_options)+'。実際に使った材料だけを栄養計算に入れてください。')
-    elif model_path and suggestion is not None:
-        st.info('この写真では料理の種類を判断できませんでした。')
-    elif not model_path:
-        st.caption('このPCでは写真認識が未設定です。料理名を選んで続けられます。')
-    color = color_note(rgb)
-    if color:
-        st.caption('写真中央の主な色 · '+color)
-    names = [None, *CHOICES]
-    suggested = suggestion.name if suggestion else None
-    st.selectbox('料理名の候補', names, index=names.index(suggested), key='meal_dish_candidate_'+draft['id'],
-                 format_func=lambda name: name or 'ここから選ぶ')
-    if st.session_state['meal_dish_candidate_'+draft['id']]:
-        st.button('選んだ料理名を入力する', key='dish_use_'+draft['id'], on_click=_use_name, args=(draft,))
+    suggested = suggestion.name if suggestion and suggestion.name in STANDARD_DISH_NAMES else None
+    if rgb is not None:
+        if suggested:
+            st.info(f'写真からの候補は「{suggested}」です。確認して料理を選んでください。')
+            if suggestion.visible_options:
+                st.caption('写っている具材の候補 · ' + '、'.join(suggestion.visible_options))
+        else:
+            reason = ''
+            if draft.get('photo_analysis_unavailable'):
+                reason = '（この環境では写真認識を利用できません）'
+            if draft.get('photo_analysis_failed'):
+                reason = '（写真認識を実行できませんでした）'
+            st.info(f'判別できません{reason}。料理を選んで続けられます。')
+    names = [None, *STANDARD_DISH_NAMES]
+    current = draft.get('finished_recipe', {}).get('dish') or suggested
+    return st.selectbox('標準レシピの料理', names, index=names.index(current), key=candidate_key,
+                        format_func=lambda name: name or '料理を選ぶ（任意）')

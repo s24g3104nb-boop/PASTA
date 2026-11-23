@@ -7,14 +7,20 @@ FIELDS=('amount_g','kcal_100','protein_100','fat_100','carb_100')
 LABELS=('使った量（g）','100gあたり kcal','100gあたり たんぱく質（g）','100gあたり 脂質（g）','100gあたり 炭水化物（g）')
 
 
-def render_ingredients(initial_rows, key):
-    state_key=key+'_cards'
-    if state_key not in st.session_state:st.session_state[state_key]=[dict(row) for row in initial_rows]
-    rows=st.session_state[state_key]
+def render_ingredients(initial_rows, key, *, rows=None):
+    show_origins = rows is not None
+    if rows is None:
+        state_key = key + '_cards'
+        if state_key not in st.session_state:
+            st.session_state[state_key] = [dict(row) for row in initial_rows]
+        rows = st.session_state[state_key]
     for i,row in enumerate(rows):
         with st.container(border=True,key=f"card_ingredient_{key}_{i}"):
             st.write(f"{row['name']} · {row['amount_g']:g} g")
-            st.caption(f"{row['amount_g']*row['kcal_100']/100:.1f} kcal")
+            source = ''
+            if show_origins:
+                source = ' · 標準レシピの参考値' if row in initial_rows else ' · 手入力'
+            st.caption(f"{row['amount_g']*row['kcal_100']/100:.1f} kcal{source}")
             c1,c2=st.columns(2)
             if c1.button('編集',key=f'{key}_edit_{i}'):
                 st.session_state[key+'_editing']=i

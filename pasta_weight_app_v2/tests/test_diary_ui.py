@@ -74,3 +74,81 @@ assert not at.exception and entries()[0]['nutrition_status']=='unknown'
     result=subprocess.run([sys.executable,'-c',script],cwd=Path(__file__).resolve().parents[2],
        env=dict(os.environ,PASTA_DATA_DIR=str(tmp_path/'data')),capture_output=True,text=True,timeout=90)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_finished_recipe_manual_edit_portion_and_calendar(tmp_path):
+    script = r'''
+from datetime import datetime
+import sys
+sys.path.insert(0,'pasta_weight_app_v2')
+from streamlit.testing.v1 import AppTest
+from meal_diary import entries
+from diary_ui import JST
+at=AppTest.from_string("from app_runtime import render_application; render_application(admin=False)", default_timeout=20).run()
+at.button(key='home_meal').click().run()
+select=lambda label: next(w for w in at.selectbox if w.label==label)
+number=lambda label: next(w for w in at.number_input if w.label==label)
+caption=lambda text: any(text in w.value for w in at.caption)
+select('標準レシピの料理').set_value('カルボナーラ').run()
+at.button(key='meal_use_recipe').click().run()
+assert not at.exception and number('乾麺の参考重量（g）').value==80
+assert caption('実測値やAI推定値ではありません')
+number('乾麺の参考重量（g）').set_value(100).run()
+number('食べた割合（%）').set_value(50).run()
+next(w for w in at.checkbox if w.label=='実際に使った材料と分量を確認しました').check().run()
+assert any('料理全体' in w.value and '638.3 kcal' in w.value for w in at.markdown)
+assert any('食べた分' in w.value and '319.' in w.value for w in at.markdown)
+at.button(key='meal_save').click().run()
+assert not at.exception and len(entries())==1
+row=entries()[0]
+assert row['dish_name']=='カルボナーラ' and row['measurement_id'] is None
+assert row['nutrition_snapshot']['calculation']['recipe_input']['ingredients_confirmed']
+assert abs(row['nutrition_snapshot']['kcal']-319.15)<1e-6
+at.button(key='meal_detail_cooking').click().run()
+assert not at.exception and number('食べた割合（%）').value==50
+assert next(w for w in at.checkbox if w.label=='実際に使った材料と分量を確認しました').value
+number('食べた割合（%）').set_value(25).run()
+at.button(key='meal_save').click().run()
+assert not at.exception and len(entries())==1 and abs(entries()[0]['nutrition_snapshot']['kcal']-159.575)<1e-6
+at.button(key='meal_detail_back').click().run()
+at.radio(key='diary_view').set_value('カレンダー').run()
+day=datetime.now(JST).date().isoformat()
+assert '•' in at.button(key='diary_day_'+day).label
+'''
+    result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
+                           env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data')),
+                           capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_vision_suggestion_runs_once_and_accepts_manual_override(tmp_path):
+    script = r'''
+import sys
+sys.path.insert(0,'pasta_weight_app_v2')
+from streamlit.testing.v1 import AppTest
+at=AppTest.from_string("""
+import numpy as np
+import streamlit as st
+from types import SimpleNamespace
+import dish_vision_ui
+class MockVision:
+    def predict(self, rgb):
+        st.session_state['recognition_runs']=st.session_state.get('recognition_runs',0)+1
+        return SimpleNamespace(name='トマトパスタ', visible_options=())
+dish_vision_ui._classifier=lambda *args: MockVision()
+draft=st.session_state.setdefault('meal', {'id':'capture-fixture'})
+selected=dish_vision_ui.render_dish_choice(np.zeros((30,30,3), np.uint8), draft)
+st.write(selected)
+""").run()
+assert not at.exception and at.session_state['recognition_runs']==1
+assert at.selectbox[0].value=='トマトパスタ'
+assert at.selectbox[0].options==['料理を選ぶ（任意）', 'カルボナーラ', 'トマトパスタ', 'ジェノベーゼ']
+at.selectbox[0].set_value('ジェノベーゼ').run()
+assert not at.exception and at.selectbox[0].value=='ジェノベーゼ'
+assert at.session_state['recognition_runs']==1
+'''
+    result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
+                            env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data'),
+                                     PASTA_OPENCLIP_CHECKPOINT=str(__file__)),
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr

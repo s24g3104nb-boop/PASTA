@@ -89,3 +89,62 @@ def test_backup_failure_leaves_schema_untouched(db,monkeypatch):
     monkeypatch.setattr(diary,'backup_database',lambda *a,**kw:(_ for _ in ()).throw(OSError('disk full')))
     with pytest.raises(OSError):diary.initialize(db)
     with sqlite3.connect(db) as c:assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='meal_entries'").fetchone()
+
+
+def test_finished_recipe_reference_and_portion_without_measurement(db):
+    from finished_recipe import standard_rows
+    rows = standard_rows('トマトパスタ', 80)
+    assert [row['amount_g'] for row in rows] == pytest.approx([80, 6.4, 2.4])
+    rows[0]['amount_g'] = 60
+    rows.pop()
+    rows.append(dict(name='追加食材', amount_g=25, kcal_100=100, protein_100=4, fat_100=2, carb_100=10))
+    recipe = dict(dish='トマトパスタ', reference_dry_g=80, ingredients=rows,
+                  consumed_percent=50, ingredients_confirmed=True)
+    result = save(db, finished_recipe=recipe)
+    snapshot = result['nutrition_snapshot']
+    calc = snapshot['calculation']
+    assert result['nutrition_status'] == 'template_estimate'
+    assert result['measurement_id'] is None and result['cooking_session_id'] is None
+    assert calc['dry_weight_source'] == 'reference' and calc['dry_weight_g'] == 80
+    assert calc['ingredient_origins'] == ['user_input', 'standard_recipe', 'user_input']
+    assert calc['total']['kcal'] == pytest.approx(296.8 + 14.4 + 56.576 + 25)
+    assert snapshot['kcal'] == pytest.approx(calc['total']['kcal'] / 2)
+    assert all(snapshot[nutrient] == pytest.approx(value/2) for nutrient, value in calc['total'].items())
+    assert diary.get('one', db)['nutrition_snapshot'] == snapshot
+    assert save(db, finished_recipe=recipe)['updated_at'] == result['updated_at']
+
+
+def test_finished_recipe_with_saved_dry_and_frozen_snapshot(db):
+    from finished_recipe import standard_rows
+    mid = measure(db)
+    recipe = dict(dish='ジェノベーゼ', reference_dry_g=80, ingredients=standard_rows('ジェノベーゼ', 25),
+                  consumed_percent=25, ingredients_confirmed=True)
+    first = save(db, measurement_id=mid, finished_recipe=recipe)
+    with sqlite3.connect(db) as c:
+        c.execute('UPDATE measurements SET actual_g=40 WHERE id=?', (mid,))
+    assert first['nutrition_status'] == 'confirmed_amounts'
+    assert first['nutrition_snapshot']['calculation']['dry_weight_source'] == 'actual'
+    assert first['nutrition_snapshot']['calculation']['dry_weight_g'] == 25
+    unchanged = save(db, measurement_id=mid, edit=True, expected_updated_at=first['updated_at'])
+    assert unchanged['nutrition_snapshot'] == first['nutrition_snapshot']
+    recipe['consumed_percent'] = 50
+    edited = save(db, measurement_id=mid, edit=True, expected_updated_at=unchanged['updated_at'],
+                  finished_recipe=recipe)
+    assert edited['nutrition_snapshot']['kcal'] == pytest.approx(2 * first['nutrition_snapshot']['kcal'])
+    assert edited['nutrition_snapshot']['calculation']['dry_weight_g'] == 25
+
+
+@pytest.mark.parametrize(('dish', 'amounts'), [
+    ('カルボナーラ', [50, 25, 15]), ('トマトパスタ', [100, 8, 3]), ('ジェノベーゼ', [15, 15, 8, 12, 3]),
+])
+def test_finished_standard_recipe_amounts(dish, amounts):
+    from finished_recipe import standard_rows
+    assert [row['amount_g'] for row in standard_rows(dish, 100)] == amounts
+
+
+def test_finished_recipe_can_use_older_weight_without_saved_nutrition():
+    from finished_recipe import recipe_dry_basis
+    dry = recipe_dry_basis({'reference_dry_g': 80}, {'estimated_g': 55, 'actual_g': 50})
+    assert dry['weight_source'] == 'actual' and dry['dry_weight_g'] == 50
+    assert dry['nutrition']['kcal'] == 185.5
+    assert 'USDA' in dry['nutrition_source']

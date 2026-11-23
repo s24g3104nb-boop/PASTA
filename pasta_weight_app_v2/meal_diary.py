@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import sqlite3
 from storage import DEFAULT_DB
+from finished_recipe import calculate_finished_recipe
 from data_backup import backup_database
 from meal_photos import prepare_photo, persist_photo, photo_path as _photo_path
 from nutrition_state import STANDARD_NUTRITION_NOTE, standard_nutrition_used
@@ -89,13 +90,15 @@ def _sources(c,measurement_id,cooking_session_id):
 
 @logged_operation(RECORDS, '食事記録の保存・編集')
 def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',measurement_id=None,
-         cooking_session_id=None,edit=False,expected_updated_at=None,remove_photo=False):
+         cooking_session_id=None,edit=False,expected_updated_at=None,remove_photo=False,finished_recipe=None):
     if not isinstance(ident,str) or not ident or len(ident)>128:raise ValueError('記録の識別情報を確認してください。')
     if type(date) is not Date or not Date(1900,1,1)<=date<=Date(2100,12,31):raise ValueError('食べた日を確認してください。')
     if time is not None and not isinstance(time,Time):raise ValueError('食べた時刻を確認してください。')
     if not isinstance(name,str) or not name.strip() or len(name)>120:raise ValueError('料理名を120文字以内で入力してください。')
     if not isinstance(memo,str) or len(memo)>2000:raise ValueError('メモは2000文字以内にしてください。')
     if meal_type not in ('','朝食','昼食','夕食','間食','その他'):raise ValueError('食事の区分を選び直してください。')
+    if finished_recipe is not None and cooking_session_id is not None:
+        raise ValueError('食事の栄養計算を一つ選んでください。')
     initialize(db);filename=None
     try:
         with sqlite3.connect(db) as c:
@@ -116,6 +119,11 @@ def save(ident,date,time,name,memo='',photo=None,db=DEFAULT_DB,*,meal_type='',me
             if same_link:
                 snapshot=json.loads(old['measurement_snapshot_json'] or 'null');status=old['nutrition_status']
                 source=old['nutrition_source'];nutrition=json.loads(old['nutrition_snapshot_json'] or 'null')
+            if finished_recipe is not None:
+                calculation = calculate_finished_recipe(finished_recipe, snapshot)
+                nutrition = dict(calculation['portion'], calculation=calculation)
+                status = calculation['nutrition_basis']
+                source = '乾麺・材料・食べた割合に基づく計算'
             if photo is not None:filename=persist_photo(prepare_photo(photo),db)
             stamp=datetime.now(timezone.utc).isoformat()
             payload=dict(id=ident,eaten_date=date.isoformat(),eaten_time=time.replace(tzinfo=None).isoformat() if time else None,
