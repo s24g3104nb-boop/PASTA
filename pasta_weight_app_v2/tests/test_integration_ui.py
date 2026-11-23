@@ -236,6 +236,17 @@ assert any('面積からの推定重量 約' in m.value for m in at.markdown)
 at.button(key='meal_open_cooking').click().run()
 assert at.selectbox(key='record_kind').value == '料理・栄養'
 assert any('実測 40 g' in m.value for m in at.markdown)
+servings = f"cooking_servings_{row['id']}_None"
+fraction = f"cooking_fraction_{row['id']}"
+assert at.number_input(key=servings).value == 1
+assert at.number_input(key=fraction).value == 1.0
+at.number_input(key=servings).set_value(3).run()
+at.number_input(key=fraction).set_value(0.4).run()
+at.selectbox(key='cooking_section').set_value('保存した料理・レシピ').run()
+at.selectbox(key='cooking_section').set_value('料理を作る').run()
+assert at.number_input(key=servings).value == 3
+assert at.number_input(key=fraction).value == 0.4
+assert not at.exception
 at.button(key='back_to_meal_draft').click().run()
 assert any('面積からの推定重量 約' in m.value for m in at.markdown)
 next(w for w in at.text_input if w.label == '料理名').set_value('面積推定の動作確認').run()

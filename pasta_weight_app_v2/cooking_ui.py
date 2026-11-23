@@ -51,6 +51,12 @@ def _remember_controls():
     }
 
 
+def _number_input(label, *, key, initial, **options):
+    # Initialize the draft only once, including when the widget is restored.
+    st.session_state.setdefault(key, initial)
+    return st.number_input(label, key=key, **options)
+
+
 def render_cooking_tab(db_path=DEFAULT_DB):
     _restore_controls()
     st.subheader('まず、乾麺の記録を選ぼう')
@@ -145,12 +151,12 @@ def render_cooking_tab(db_path=DEFAULT_DB):
                                               key=f'cooking_template_confirm_{measurement_id}_{template_id}')
         division = st.radio('取り分け方法', ['等分人数', '自分が食べる割合'], horizontal=True,
                             key=f'cooking_division_{measurement_id}')
-        servings_input = st.number_input('等分する人数', min_value=1,
-                                         value=template['default_servings'] if template else 1, step=1,
-                                         key=f'cooking_servings_{measurement_id}_{template_id}')
-        fraction_input = st.number_input('食べる割合（1=全部、0.5=半分）',
-                                         min_value=0.001, max_value=1.0, value=1.0, step=0.05,
-                                         key=f'cooking_fraction_{measurement_id}')
+        servings_input = _number_input('等分する人数', min_value=1, step=1,
+                                       initial=template['default_servings'] if template else 1,
+                                       key=f'cooking_servings_{measurement_id}_{template_id}')
+        fraction_input = _number_input('食べる割合（1=全部、0.5=半分）',
+                                       min_value=0.001, max_value=1.0, initial=1.0, step=0.05,
+                                       key=f'cooking_fraction_{measurement_id}')
         preview_click = st.button('栄養をプレビュー', key=f'cooking_preview_{measurement_id}')
         save = st.button('入力を確認して計算・保存', disabled=bool(used_sessions),
                          key=f'cooking_save_{measurement_id}')
@@ -158,12 +164,12 @@ def render_cooking_tab(db_path=DEFAULT_DB):
         with st.expander('この材料をレシピとして登録（任意）'):
             template_name = st.text_input('登録するテンプレート名', key=f'cooking_recipe_name_{measurement_id}')
             template_source = st.text_input('材料・栄養値の出典、分量の前提', key=f'cooking_recipe_source_{measurement_id}')
-            reference_dry_g = st.number_input('この入力材料に対応する基準乾麺g', min_value=0.1,
-                                               value=float(snapshot['dry_weight_g']), step=0.1,
-                                               key=f'cooking_reference_g_{measurement_id}')
-            reference_servings = st.number_input('テンプレートの基準人数', min_value=1,
-                                                  value=template['default_servings'] if template else 1, step=1,
-                                                  key=f'cooking_reference_servings_{measurement_id}')
+            reference_dry_g = _number_input('この入力材料に対応する基準乾麺g', min_value=0.1, step=0.1,
+                                            initial=float(snapshot['dry_weight_g']),
+                                            key=f'cooking_reference_g_{measurement_id}')
+            reference_servings = _number_input('テンプレートの基準人数', min_value=1, step=1,
+                                               initial=template['default_servings'] if template else 1,
+                                               key=f'cooking_reference_servings_{measurement_id}')
             register_template = st.button('入力材料をレシピテンプレートとして登録',
                                           key=f'cooking_register_template_{measurement_id}')
     if register_template:
