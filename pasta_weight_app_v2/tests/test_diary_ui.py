@@ -139,6 +139,8 @@ class MockVision:
         return SimpleNamespace(name='トマトパスタ', visible_options=())
 dish_vision_ui._classifier=lambda checkpoint, device: MockVision()
 draft=st.session_state.setdefault('meal', {'id':'capture-fixture'})
+# Streamlit may deliver a callback for a selector already cleared by a photo change.
+dish_vision_ui._remember_dish_choice(draft, 'already-removed')
 rgb=np.zeros((30,30,3), np.uint8) if st.checkbox('test-photo') else None
 selected=dish_vision_ui.render_dish_choice(rgb, draft)
 st.write(selected)
@@ -161,4 +163,71 @@ assert at.session_state['recognition_runs']==1
                                      PASTA_OPENCLIP_CHECKPOINT=str(__file__),
                                      PASTA_DISH_HEAD_PATH=str(tmp_path/'invalid_research_artifact.json')),
                             capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_meal_steps_preserve_photo_and_manual_selection_until_save(tmp_path):
+    script = r'''
+from io import BytesIO
+import sys
+from PIL import Image
+from streamlit.testing.v1 import AppTest
+
+sys.path.insert(0, 'pasta_weight_app_v2')
+from meal_diary import entries, photo_path
+
+def photo(color):
+    image = BytesIO()
+    Image.new('RGB', (32, 24), color).save(image, format='PNG')
+    return image.getvalue()
+
+def field(elements, label):
+    return next(item for item in elements if item.label == label)
+
+at = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
+at.button(key='home_meal').click().run()
+assert [heading.value for heading in at.subheader if heading.value.startswith('STEP ')] == [
+    'STEP 1 · 料理の写真', 'STEP 2 · 料理名を確認',
+    'STEP 3 · 材料と栄養を確認', 'STEP 4 · 食事日記に保存',
+]
+assert at.button(key='meal_save').disabled
+at.file_uploader[0].upload('first.png', photo('red'), 'image/png').run()
+field(at.selectbox, '標準レシピの料理').set_value('ジェノベーゼ').run()
+field(at.text_input, '料理名').set_value('夕食のパスタ').run()
+day = field(at.date_input, '食べた日').value
+field(at.date_input, '食べた日').set_value(None).run()
+assert at.button(key='meal_save').disabled
+assert any('日付を入力してください' in notice.value for notice in at.caption)
+field(at.date_input, '食べた日').set_value(day).run()
+at.radio(key='main_nav').set_value('ホーム').run()
+at.button(key='home_calendar').click().run()
+assert at.radio(key='diary_view').value == 'カレンダー'
+assert at.button(key='diary_add_selected_day')
+resume = next(button for button in at.button if button.key and button.key.startswith('resume_'))
+resume.click().run()
+assert field(at.selectbox, '標準レシピの料理').value == 'ジェノベーゼ'
+assert field(at.text_input, '料理名').value == '夕食のパスタ'
+assert at.button(key='meal_remove_photo')
+at.file_uploader[0].upload('replacement.png', photo('green'), 'image/png').run()
+assert field(at.selectbox, '標準レシピの料理').value == 'ジェノベーゼ'
+assert field(at.text_input, '料理名').value == '夕食のパスタ'
+at.button(key='meal_save').click().run()
+assert not at.exception
+assert any('食事記録を保存しました' in notice.value for notice in at.success)
+row, = entries()
+with Image.open(photo_path(row['photo'])) as saved_photo:
+    assert saved_photo.getpixel((0, 0)) == (0, 128, 0)
+
+at.button(key='meal_detail_back').click().run()
+assert at.radio(key='diary_view').value == 'カレンダー'
+fresh = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
+fresh.button(key='home_history').click().run()
+assert fresh.radio(key='diary_view').value == '写真付き一覧'
+assert any(heading.value == '夕食のパスタ' for heading in fresh.subheader)
+assert len(entries()) == 1
+'''
+    env = dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data'))
+    env.pop('PASTA_OPENCLIP_CHECKPOINT', None)
+    result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
+                            env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

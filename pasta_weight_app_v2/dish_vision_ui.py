@@ -30,6 +30,12 @@ def _remember_recognition(draft, toggle_key, candidate_key):
         st.session_state.pop(candidate_key, None)
 
 
+def _remember_dish_choice(draft, key):
+    # A photo change can clear this widget before Streamlit delivers its callback.
+    if key in st.session_state:
+        draft['manual_dish_choice'] = st.session_state[key]
+
+
 def render_dish_choice(rgb, draft):
     candidate_key = 'meal_dish_candidate_'+draft['id']
     model_path = os.environ.get('PASTA_OPENCLIP_CHECKPOINT')
@@ -42,7 +48,7 @@ def render_dish_choice(rgb, draft):
         if rgb is not None and enabled and not draft.get('photo_analyzed'):
             draft['photo_analyzed'] = True
             try:
-                with st.spinner('この端末で料理の候補を調べています…'):
+                with st.spinner('料理の候補を確認中… 初回は準備に時間がかかることがあります。'):
                     model = _classifier(_signature(model_path), os.environ.get('PASTA_LOCAL_VISION_DEVICE', 'cpu'))
                     draft['photo_suggestion'] = model.predict(rgb)
             except (OSError, ValueError, ImportError, RuntimeError):
@@ -63,6 +69,7 @@ def render_dish_choice(rgb, draft):
             reason = '（写真認識を実行できませんでした）'
         st.info(f'判別できません{reason}。料理を選んで続けられます。')
     names = [None, *STANDARD_DISH_NAMES]
-    current = draft.get('finished_recipe', {}).get('dish') or suggested
+    current = draft.get('manual_dish_choice', draft.get('finished_recipe', {}).get('dish') or suggested)
     return st.selectbox('標準レシピの料理', names, index=names.index(current), key=candidate_key,
+                        on_change=_remember_dish_choice, args=(draft, candidate_key),
                         format_func=lambda name: name or '料理を選ぶ（任意）')

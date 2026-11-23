@@ -16,16 +16,16 @@ def render_ingredients(initial_rows, key, *, rows=None):
         rows = st.session_state[state_key]
     for i,row in enumerate(rows):
         with st.container(border=True,key=f"card_ingredient_{key}_{i}"):
-            st.write(f"{row['name']} · {row['amount_g']:g} g")
+            st.write(f"{row['name']} · **{row['amount_g']:g} g**")
             source = ''
             if show_origins:
                 source = ' · 標準レシピの参考値' if row in initial_rows else ' · 手入力'
             st.caption(f"{row['amount_g']*row['kcal_100']/100:.1f} kcal{source}")
             c1,c2=st.columns(2)
-            if c1.button('編集',key=f'{key}_edit_{i}'):
+            if c1.button('編集',key=f'{key}_edit_{i}',width='stretch'):
                 st.session_state[key+'_editing']=i
                 st.rerun()
-            if c2.button('取り除く',key=f'{key}_remove_{i}'):
+            if c2.button('取り除く',key=f'{key}_remove_{i}',width='stretch'):
                 rows.pop(i)
                 st.session_state.pop(key+'_editing',None)
                 st.rerun()

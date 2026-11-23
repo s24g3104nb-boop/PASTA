@@ -44,7 +44,7 @@ def _new_draft(*, day=None, measurement_id=None, cooking_session_id=None):
         'id': ident, 'edit': False, 'dish_name': '', 'eaten_date': day or now.date(),
         'eaten_time': now.time().replace(second=0, microsecond=0, tzinfo=None),
         'time_known': True, 'meal_type': '', 'memo': '', 'photo_bytes': None,
-        'photo_name': None, 'photo': None, 'remove_photo': False,
+        'photo_name': None, 'photo': None, 'remove_photo': False, 'photo_mode': 'アップロード',
         'measurement_id': measurement_id, 'cooking_session_id': cooking_session_id,
         'expected_updated_at': None, 'saved': False,
     }
@@ -136,6 +136,17 @@ def _show_list():
     st.session_state.diary_screen = 'list'
 
 
+def open_diary_list(view='写真付き一覧'):
+    _show_list()
+    _route_diary()
+    st.session_state.diary_list_view = view
+    st.session_state.diary_view = view
+
+
+def _remember_diary_view():
+    st.session_state.diary_list_view = st.session_state.diary_view
+
+
 def _remember_field(draft_id, field, widget_key):
     draft = _drafts()[draft_id]
     draft[field] = st.session_state[widget_key]
@@ -175,12 +186,16 @@ def _reset_photo_analysis(draft):
 def _upload_changed(draft_id, key):
     uploaded = st.session_state.get(key)
     draft = _drafts()[draft_id]
+    if uploaded is None and draft.get('photo_input_key') != key:
+        return
     _reset_photo_analysis(draft)
     if uploaded is not None:
+        draft['photo_input_key'] = key
         draft['photo_bytes'] = uploaded.getvalue()
         draft['photo_name'] = uploaded.name
         draft['remove_photo'] = False
     else:
+        draft.pop('photo_input_key', None)
         draft['photo_bytes'] = draft['photo_name'] = None
 
 
@@ -189,6 +204,7 @@ def _clear_photo(draft_id):
     _reset_photo_analysis(draft)
     draft['photo_bytes'] = None
     draft['photo_name'] = None
+    draft.pop('photo_input_key', None)
     draft['remove_photo'] = True
     draft['upload_generation'] = draft.get('upload_generation', 0) + 1
 
@@ -332,36 +348,27 @@ def _link_options(draft, db_path):
                   on_click=_go_cooking, args=(draft,), width='stretch')
 
 
-def _draft_selector():
-    drafts = [d for d in _drafts().values() if not d['saved']]
-    if len(drafts) < 2:
+def _draft_selector(*, exclude=None):
+    drafts = [d for d in _drafts().values() if not d['saved'] and d['id'] != exclude and
+              (d['dish_name'].strip() or d['photo_bytes'] is not None or d['memo']
+               or d.get('finished_recipe') or d.get('manual_dish_choice') or d['measurement_id'])]
+    if not drafts:
         return
     with st.expander('入力途中の記録'):
         for draft in drafts:
             label = draft['dish_name'].strip() or '料理名未入力'
-            st.button(f"{draft['eaten_date'].isoformat()} · {label}",
+            day = draft['eaten_date']
+            st.button(f"{day.isoformat() if day else '日付未入力'} · {label}",
                       key='resume_' + draft['id'], on_click=_activate, args=(draft,), width='stretch')
 
 
-def _render_editor(db_path):
-    draft = _drafts().get(st.session_state.get('diary_active_draft'))
-    if not draft:
-        _activate(_new_draft())
-        draft = _drafts()[st.session_state.diary_active_draft]
-    st.button('記録一覧へ戻る', key='meal_editor_back', on_click=_show_list)
-    st.subheader('食事記録を編集' if draft['edit'] else '食べたパスタを記録する')
-    st.caption('料理名と日付だけでも保存できます。入力途中の内容は、この接続中は保持されます。')
-    _draft_selector()
-    if draft['saved']:
-        st.success('食事記録を保存しました。')
-        st.button('保存した記録を見る', key='meal_view_saved', type='primary',
-                  on_click=open_diary_entry, args=(draft['id'],), width='stretch')
-        st.button('別の食事を記録する', key='meal_start_another', on_click=start_diary, width='stretch')
-        return
-    mode = st.radio('写真の追加方法', ['アップロード', 'カメラ'], horizontal=True,
-                    key='meal_photo_mode_'+draft['id'])
+def _render_meal_photo(draft, db_path):
+    draft.setdefault('photo_mode', 'アップロード')
+    mode = _field(st.radio, '写真の追加方法', draft, 'photo_mode',
+                  options=['アップロード', 'カメラ'], horizontal=True)
     upload_key = f"meal_photo_{draft['id']}_{draft.get('upload_generation', 0)}"
     if mode == 'カメラ':
+        st.caption('カメラが使えないときは、アップロードを選べます。')
         upload_key += '_camera'
         st.camera_input('完成料理を撮影', key=upload_key, on_change=_upload_changed,
                         args=(draft['id'], upload_key))
@@ -376,21 +383,28 @@ def _render_editor(db_path):
                 prepared = prepare_photo(draft['photo_bytes'])
                 draft['photo_rgb'] = image_to_rgb(BytesIO(prepared.content))
             rgb = draft['photo_rgb']
-            st.image(rgb, width='stretch')
+            with st.container(key='meal_photo_preview'):
+                st.image(rgb, width='stretch')
         except (ValueError, OSError):
             valid_photo = False
             st.error('写真を読み込めませんでした。JPEG・PNG・WebPの写真を選び直してください。')
     elif draft['photo'] and not draft['remove_photo']:
-        _photo(draft, db_path, preview=True)
+        with st.container(key='meal_photo_preview'):
+            _photo(draft, db_path, preview=True)
     if draft['photo_bytes'] is not None or (draft['photo'] and not draft['remove_photo']):
         st.button('写真を外す', key='meal_remove_photo', on_click=_clear_photo, args=(draft['id'],))
 
+    return rgb, valid_photo
+
+
+def _render_meal_dish(rgb, draft, db_path):
     from dish_vision_ui import render_dish_choice
 
-    valid_recipe = True
     selected_dish = render_dish_choice(rgb, draft)
-    try:
-        if selected_dish or draft.get('finished_recipe'):
+    measurements = {}
+    valid = True
+    if selected_dish or draft.get('finished_recipe'):
+        try:
             measurements = {row['id']: row for row in list_measurements(db_path)
                             if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic'}
             original = draft.get('original_measurement_snapshot')
@@ -398,40 +412,69 @@ def _render_editor(db_path):
                 measurements[original['id']] = original
             if selected_dish and selected_dish != draft.get('finished_recipe', {}).get('dish'):
                 if draft.get('finished_recipe'):
-                    st.caption('標準レシピを切り替えると、材料と分量は新しい参考値になります。')
+                    st.caption('レシピを切り替えると、材料と分量が新しい参考値になります。')
                 st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch',
                           on_click=_apply_finished_recipe, args=(draft, selected_dish, measurements))
             error = draft.pop('recipe_apply_error', None)
             if error:
                 st.warning(error)
-            if draft.get('finished_recipe'):
-                valid_recipe = render_finished_recipe(draft, measurements)
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        valid_recipe = not draft.get('finished_recipe')
-        st.warning(str(exc) if isinstance(exc, ValueError) else '乾麺の記録を開けませんでした。')
+        except (sqlite3.Error, OSError, ValueError):
+            valid = False
+            st.warning('乾麺の記録を開けませんでした。')
     _field(st.text_input, '料理名', draft, 'dish_name', placeholder='例：トマトのパスタ', max_chars=120)
+    return measurements, valid
+
+
+def _render_meal_nutrition(draft, db_path, measurements, valid_measurements):
+    if draft.get('finished_recipe'):
+        if not valid_measurements:
+            return False
+        try:
+            return render_finished_recipe(draft, measurements)
+        except ValueError as exc:
+            st.warning(str(exc))
+            return False
+    st.caption('標準レシピを選ぶと、材料と分量が入ります。')
+    try:
+        _link_options(draft, db_path)
+    except (sqlite3.Error, OSError, ValueError):
+        st.warning('関連する記録を読み込めません。もう一度お試しください。')
+    return True
+
+
+def _meal_date_label(day, meal_time):
+    if not day:
+        return '日付を入力してください。'
+    return day.isoformat() + (f' · {meal_time.strftime("%H:%M")}' if meal_time else '')
+
+
+def _render_meal_save(draft, db_path, valid_photo, valid_recipe):
     _field(st.date_input, '食べた日', draft, 'eaten_date', min_value=date(1900, 1, 1),
            max_value=date(2100, 12, 31), format='YYYY/MM/DD')
     _field(st.checkbox, '食べた時刻も記録する', draft, 'time_known')
     if draft['time_known']:
         _field(st.time_input, '食べた時刻（日本時間）', draft, 'eaten_time')
-    _field(st.selectbox, '食事の区分（任意）', draft, 'meal_type', options=MEAL_TYPES,
-           format_func=lambda value: value or '指定しない')
-    _field(st.text_area, 'ひとこと（任意）', draft, 'memo', max_chars=2000)
-    if not draft.get('finished_recipe'):
-        try:
-            _link_options(draft, db_path)
-        except (sqlite3.Error, OSError, ValueError):
-            st.warning('関連する記録を読み込めません。もう一度お試しください。')
+    with st.expander('食事の区分・ひとこと（任意）'):
+        _field(st.selectbox, '食事の区分（任意）', draft, 'meal_type', options=MEAL_TYPES,
+               format_func=lambda value: value or '指定しない')
+        _field(st.text_area, 'ひとこと（任意）', draft, 'memo', max_chars=2000)
+    dish_name = draft['dish_name'].strip()
+    meal_time = draft['eaten_time'] if draft['time_known'] else None
+    has_photo = draft['photo_bytes'] is not None or (draft['photo'] and not draft['remove_photo'])
+    with st.container(border=True, key='meal_save_review'):
+        st.caption('保存する内容')
+        st.text(dish_name or '料理名を入力してください。')
+        photo_status = '写真あり' if has_photo else '写真なし'
+        st.caption(f"{_meal_date_label(draft['eaten_date'], meal_time)} · {photo_status}")
     if st.button('食事記録を保存', key='meal_save', type='primary', width='stretch',
-                 disabled=not (valid_photo and valid_recipe)):
+                 disabled=not (dish_name and draft['eaten_date'] and valid_photo and valid_recipe)):
         try:
             recipe = draft.get('finished_recipe')
             if draft.get('original_recipe') == recipe and draft.get('original_measurement_id') == draft['measurement_id']:
                 recipe = None
             with st.spinner('食事記録を保存しています…'):
-                saved = save(draft['id'], draft['eaten_date'], draft['eaten_time'] if draft['time_known'] else None,
-                             draft['dish_name'], draft['memo'], draft['photo_bytes'], db_path,
+                saved = save(draft['id'], draft['eaten_date'], meal_time,
+                             dish_name, draft['memo'], draft['photo_bytes'], db_path,
                              meal_type=draft['meal_type'], measurement_id=draft['measurement_id'],
                              cooking_session_id=draft['cooking_session_id'], edit=draft['edit'],
                              expected_updated_at=draft['expected_updated_at'], remove_photo=draft['remove_photo'],
@@ -447,6 +490,34 @@ def _render_editor(db_path):
             st.error(str(exc))
         except (sqlite3.Error, OSError):
             st.error('保存できませんでした。入力内容は残っています。保存先の空き容量や接続を確認し、もう一度保存してください。')
+
+
+def _render_editor(db_path):
+    draft = _drafts().get(st.session_state.get('diary_active_draft'))
+    if not draft:
+        _activate(_new_draft())
+        draft = _drafts()[st.session_state.diary_active_draft]
+    st.button('記録一覧へ戻る', key='meal_editor_back', on_click=_show_list)
+    st.subheader('食事記録を編集' if draft['edit'] else '完成料理を記録')
+    _draft_selector(exclude=draft['id'])
+    if draft['saved']:
+        st.success('食事記録を保存しました。')
+        st.button('保存した記録を見る', key='meal_view_saved', type='primary',
+                  on_click=open_diary_entry, args=(draft['id'],), width='stretch')
+        st.button('別の食事を記録する', key='meal_start_another', on_click=start_diary, width='stretch')
+        return
+    with st.container(border=True, key='meal_step_photo'):
+        st.subheader('STEP 1 · 料理の写真')
+        rgb, valid_photo = _render_meal_photo(draft, db_path)
+    with st.container(border=True, key='meal_step_dish'):
+        st.subheader('STEP 2 · 料理名を確認')
+        measurements, valid_measurements = _render_meal_dish(rgb, draft, db_path)
+    with st.container(border=True, key='meal_step_nutrition'):
+        st.subheader('STEP 3 · 材料と栄養を確認')
+        valid_recipe = _render_meal_nutrition(draft, db_path, measurements, valid_measurements)
+    with st.container(border=True, key='meal_step_save'):
+        st.subheader('STEP 4 · 食事日記に保存')
+        _render_meal_save(draft, db_path, valid_photo, valid_recipe)
 
 
 def _render_detail(rows, db_path):
@@ -552,7 +623,9 @@ def _render_list(rows, db_path):
         st.success(notice)
     st.button('食べたパスタを記録する', key='diary_add', type='primary', width='stretch', on_click=start_diary)
     _draft_selector()
-    view = st.radio('記録の表示', ['写真付き一覧', 'カレンダー'], key='diary_view', horizontal=True)
+    st.session_state.setdefault('diary_view', st.session_state.get('diary_list_view', '写真付き一覧'))
+    view = st.radio('記録の表示', ['写真付き一覧', 'カレンダー'], key='diary_view', horizontal=True,
+                    on_change=_remember_diary_view)
     selected = _calendar(rows) if view == 'カレンダー' else None
     now = datetime.now(JST).date()
     oldest = min((date.fromisoformat(r['eaten_date']) for r in rows), default=now)

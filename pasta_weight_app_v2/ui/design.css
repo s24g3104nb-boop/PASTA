@@ -12,14 +12,6 @@ p,label,li {line-height:1.65;} [data-testid="stCaptionContainer"] {color:var(--p
 .pl-brand {display:flex;align-items:center;gap:10px;font-size:19px;font-weight:750;letter-spacing:-.6px;margin-bottom:24px;}
 .pl-brand span:first-child {background:var(--pl-green);color:white;border-radius:12px;width:36px;height:36px;display:grid;place-items:center;}
 .pl-brand small {margin-left:auto;font-size:11px;letter-spacing:.08em;color:var(--pl-muted);font-weight:500;}
-.pl-hero {position:relative;border-radius:var(--pl-radius);background:var(--pl-card);border:1px solid var(--pl-line);padding:var(--pl-space-lg);overflow:hidden;margin:0 0 16px;}
-.pl-eyebrow {font-size:11px;letter-spacing:.17em;color:var(--pl-green);font-weight:750;}
-.pl-hero h1 {margin:14px 0 12px;font-size:clamp(25px,3.8vw,36px)!important;text-wrap:balance;}
-.pl-hero p {color:var(--pl-muted);font-size:15px;margin-bottom:0;}
-.pl-mobile-break {display:none;}
-.st-key-home_actions button {min-height:68px;text-align:left;padding:1rem 1.2rem;}
-.st-key-home_actions button p {font-size:1.05rem;}
-.st-key-home_meal button {background:var(--pl-sage)!important;}
 .pl-empty {background:var(--pl-card);border:1px solid var(--pl-line);border-radius:var(--pl-radius);padding:28px;text-align:center;color:var(--pl-muted);}
 .pl-empty strong {display:block;color:var(--pl-text);font-size:17px;margin:8px 0;}
 [data-testid="stVerticalBlockBorderWrapper"]>div {border-color:var(--pl-line)!important;border-radius:var(--pl-radius)!important;}
@@ -40,6 +32,7 @@ background:var(--pl-card);border:1px solid var(--pl-line);border-radius:24px;pad
 .st-key-main_nav [role="radiogroup"] label {flex:1;margin:0!important;padding:6px 2px!important;border-radius:16px;justify-content:center;min-height:48px;}
 .st-key-main_nav [role="radiogroup"]>div {flex:1;min-width:0;}
 .st-key-main_nav [data-testid="stRadioOption"] {width:100%;}
+.st-key-main_nav [data-testid="stRadioOption"]>div {display:flex;justify-content:center;width:100%;}
 .st-key-main_nav [data-testid="stRadioOption"]>div>div:first-child {display:none;}
 .st-key-main_nav [data-testid="stMarkdownContainer"] p {display:flex;flex-direction:column;align-items:center;gap:4px;}
 .st-key-main_nav [data-testid="stIconMaterial"] {font-size:22px;}
@@ -58,12 +51,10 @@ background:var(--pl-card);border:1px solid var(--pl-line);border-radius:24px;pad
 .st-key-nutrition_cards [data-testid="stMetricValue"] {font-size:1.55rem;}
 .st-key-nutrition_cards [data-testid="stMetricLabel"] {justify-content:center;}
 @keyframes pl-enter {from{opacity:.4;transform:translateY(5px)}to{opacity:1;transform:none}}
-.pl-hero,.pl-empty {animation:pl-enter .25s ease-out;}
+.pl-empty {animation:pl-enter .25s ease-out;}
 @media(max-width:640px) {
  .block-container {padding:1.3rem 1rem calc(110px + env(safe-area-inset-bottom));}
  .pl-brand {margin-top:12px;margin-bottom:20px;} .pl-brand small{font-size:10px;}
- .pl-hero {padding:25px 22px;border-radius:26px;} .pl-hero p{font-size:14px;}
- .pl-mobile-break {display:initial;}
  .st-key-main_nav {bottom:0;left:0;transform:none;width:100%;border-radius:22px 22px 0 0;padding:8px 12px calc(8px + env(safe-area-inset-bottom));}
  [data-testid="stMetricValue"]{font-size:1.7rem;}
  .st-key-capture_actions [data-testid="stHorizontalBlock"] {flex-wrap:nowrap;}
@@ -137,7 +128,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[role="combobox"
 @media(max-width:640px) {
  .block-container {padding-inline:16px;padding-bottom:calc(140px + env(safe-area-inset-bottom));}
  .pl-brand small {display:none;}
- .pl-hero {padding:24px 20px;}
  .st-key-main_nav {bottom:0;}
  .st-key-nutrition_cards [data-testid="stMetricValue"] {font-size:clamp(1rem,5vw,1.4rem);}
  .st-key-nutrition_cards [data-testid="stMetric"] {padding:12px 4px;}
@@ -166,4 +156,62 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[role="combobox"
  .st-key-main_nav {position:static;inset:auto;transform:none;width:100%;margin:0 0 var(--pl-space-sm);padding:8px 12px;border-radius:18px;box-shadow:none;}
  .block-container {padding-bottom:calc(32px + env(safe-area-inset-bottom));}
  .stApp :is(input,textarea,button,[role="alert"]) {scroll-margin-block:24px;}
+}
+
+/* Public entry points and the meal editor use native, labelled controls. */
+.st-key-home_actions button {min-height:56px;text-align:left;padding:.8rem 1rem;}
+.st-key-home_actions button p {font-size:1.05rem;}
+.st-key-home_dry_action,.st-key-home_dish_action {min-width:0;}
+.st-key-home_meal button[kind="secondary"] {background:var(--pl-sage);border-color:var(--pl-green);}
+.st-key-home_shortcuts button {min-height:48px;}
+
+.stApp :is(.st-key-meal_step_photo,.st-key-meal_step_dish,.st-key-meal_step_nutrition,.st-key-meal_step_save) h3 {
+ font-size:clamp(1.06rem,1.5vw,1.22rem)!important;
+}
+.st-key-meal_step_photo [data-testid="stFileUploaderDropzone"] {
+ background:var(--pl-bg);color:var(--pl-text);
+ border:1px solid var(--pl-line);border-radius:var(--pl-control-radius);
+}
+.st-key-meal_step_photo [data-testid="stFileUploaderDropzoneInstructions"] {color:var(--pl-muted);}
+.st-key-meal_step_photo [data-testid="stFileUploaderFile"] button {
+ min-width:44px;min-height:44px;
+}
+.st-key-meal_photo_preview [data-testid="stImage"] img,
+.st-key-meal_step_photo [data-testid="stCameraInput"] video {
+ max-height:min(52vh,480px);object-fit:contain;
+}
+.st-key-meal_step_dish [data-testid="stToggle"] label,
+.st-key-meal_step_nutrition [data-testid="stCheckbox"] label {
+ min-height:44px;align-items:center;
+}
+.st-key-meal_step_nutrition [data-testid="stNumberInput"] button {
+ min-width:44px;min-height:44px;
+}
+.st-key-meal_save_review {
+ background:var(--pl-sage);border-radius:var(--pl-control-radius);
+ padding:.75rem .9rem;
+}
+.st-key-meal_save_review [data-testid="stText"] {white-space:pre-wrap;overflow-wrap:anywhere;}
+.st-key-meal_save button {min-height:54px;}
+
+:is(.st-key-finished_nutrition_total,.st-key-finished_nutrition_portion) [data-testid="stMarkdownContainer"] p > strong:last-of-type {
+ display:block;margin-top:.25rem;line-height:1.2;
+ color:var(--pl-green);font-size:clamp(1.35rem,3.5vw,1.7rem);font-variant-numeric:tabular-nums;
+}
+:is(.st-key-finished_nutrition_total,.st-key-finished_nutrition_portion) [data-testid="stMarkdownContainer"] p > br:first-of-type:has(+ strong:last-of-type) {
+ display:none;
+}
+.st-key-finished_nutrition_portion {
+ background:var(--pl-sage);border-radius:var(--pl-radius);
+}
+.st-key-finished_nutrition_comparison [data-testid="stCaptionContainer"] p {line-height:1.55;}
+
+@media(max-width:640px) {
+ :is(.st-key-home_actions,.st-key-finished_nutrition_comparison) [data-testid="stHorizontalBlock"] {flex-direction:column;}
+ :is(.st-key-home_actions,.st-key-finished_nutrition_comparison) [data-testid="stColumn"] {min-width:0!important;flex:auto!important;width:100%!important;}
+ .st-key-home_shortcuts [data-testid="stHorizontalBlock"] {flex-wrap:nowrap;gap:8px;}
+ .st-key-home_shortcuts [data-testid="stColumn"] {min-width:0!important;flex:1!important;width:auto!important;}
+ .st-key-home_shortcuts button {padding-inline:.5rem;}
+ .st-key-meal_photo_preview [data-testid="stImage"] img,
+ .st-key-meal_step_photo [data-testid="stCameraInput"] video {max-height:min(56vh,400px);}
 }

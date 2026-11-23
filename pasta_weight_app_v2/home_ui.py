@@ -2,8 +2,8 @@
 import sqlite3
 import streamlit as st
 from meal_diary import entries, photo_path
-from diary_ui import start_diary, open_diary_entry
-from ui_shell import hero, empty_state, start_capture, resume_capture, start_manual_weight
+from diary_ui import open_diary_entry, open_diary_list, start_diary
+from ui_shell import empty_state, resume_capture, start_capture, start_manual_weight
 from operation_logs import RECORDS, log_error
 
 
@@ -12,12 +12,23 @@ def render_home():
         from manual_weight_ui import render_without_photo
         render_without_photo()
         return
-    hero()
+    st.title('今日のパスタ')
     with st.container(key='home_actions'):
-        st.button('乾麺の重さをはかる', icon=':material/photo_camera:', type='primary',
-                  width='stretch', on_click=start_capture, args=('写真をアップロード',), key='home_camera')
-        st.button('完成した料理を記録する', icon=':material/restaurant:', width='stretch',
-                  on_click=start_diary, key='home_meal')
+        dry, dish = st.columns(2, gap='medium')
+        with dry.container(border=True, key='home_dry_action'):
+            st.button('乾麺を測定', icon=':material/photo_camera:', type='primary',
+                      width='stretch', on_click=start_capture, args=('写真をアップロード',), key='home_camera')
+            st.caption('ゆでる前の乾麺の重さの目安を確認。')
+        with dish.container(border=True, key='home_dish_action'):
+            st.button('完成料理を記録', icon=':material/restaurant:', width='stretch',
+                      on_click=start_diary, key='home_meal')
+            st.caption('料理の写真、材料、食べた分の栄養を記録。')
+    with st.container(key='home_shortcuts'):
+        diary, calendar = st.columns(2)
+        diary.button('食事日記', icon=':material/menu_book:', key='home_history', width='stretch',
+                     on_click=open_diary_list, args=('写真付き一覧',))
+        calendar.button('カレンダー', icon=':material/calendar_month:', key='home_calendar', width='stretch',
+                        on_click=open_diary_list, args=('カレンダー',))
     if st.session_state.get('capture_photo') is not None or st.session_state.get('result_request'):
         st.button('途中の測定を再開する', key='home_resume_capture', width='stretch', on_click=resume_capture)
     with st.expander('カメラを開く・はかりの数値を記録する'):
@@ -28,7 +39,7 @@ def render_home():
         with st.expander('サンプルで操作を確認する'):
             st.caption('CGの操作確認です。実物の推定精度を示しません。')
             st.button('サンプルで試す', key='home_demo', on_click=start_capture, args=('サンプル画像（今すぐ試す）',))
-    st.subheader('最近食べたパスタ')
+    st.subheader('最近の食事')
     try:
         rows = [row for row in entries() if st.session_state.get('_app_admin') or row.get('source_kind') != 'synthetic']
     except (OSError, sqlite3.Error, ValueError):
@@ -36,8 +47,10 @@ def render_home():
         return
     if not rows:
         empty_state('最初のひと皿を記録しよう', '料理名と食べた日だけでも残せます。')
-    for row in rows[:3]:
-        with st.container(border=True, key='card_recent_' + row['id']):
+        return
+    recent = rows[:3]
+    for column, row in zip(st.columns(len(recent), gap='medium'), recent):
+        with column.container(border=True, key='card_recent_' + row['id']):
             try:
                 path = photo_path(row['photo']) if row['photo'] else None
             except (OSError,ValueError):
@@ -53,9 +66,9 @@ def render_home():
             if not shown:
                 empty_state('🍝', '写真なしの記録')
             st.subheader(row['dish_name'])
-            st.caption(row['eaten_date'] + ' ' + (row['eaten_time'] or '') + ' ' + row.get('meal_type', ''))
+            st.caption(row['eaten_date'] + (' ' + row['eaten_time'][:5] if row['eaten_time'] else '')
+                       + (' · ' + row['meal_type'] if row.get('meal_type') else ''))
             if row.get('source_kind') == 'synthetic':
                 st.caption('デモの記録')
-            st.button('記録を見る', key='recent_' + row['id'], on_click=open_diary_entry, args=(row['id'],))
-    if rows:
-        st.button('すべての食事記録を見る', on_click=lambda: st.session_state.update(main_nav='記録', record_kind='食事日記', diary_screen='list'), key='home_history', width='stretch')
+            st.button('記録を見る', key='recent_' + row['id'], on_click=open_diary_entry, args=(row['id'],),
+                      width='stretch')

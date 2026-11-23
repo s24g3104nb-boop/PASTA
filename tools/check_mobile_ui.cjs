@@ -19,6 +19,7 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function ready(p){await pause(450);await p.waitForFunction(()=>!document.querySelector('[data-stale="true"]'));if(await p.locator('[data-testid=stException]').count())throw Error(await p.locator('[data-testid=stException]').innerText());}
 async function inspect(p,label){await ready(p);const d=await p.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,main:document.querySelector('[data-testid=stMain]')?.scrollWidth}));if(d.scroll>d.width+1||d.main>d.width+1)throw Error(label+' overflow '+JSON.stringify(d));results.push(label);console.log('PASS '+label);await p.screenshot({path:path.join(work,label+'.png'),fullPage:true});}
 async function click(p,name){await p.getByRole('button',{name,exact:true}).click();await ready(p);}
+async function clickKey(p,key){await p.locator('.st-key-'+key+' button').click();await ready(p);}
 async function nav(p,name){await p.locator('.st-key-main_nav [data-testid=stRadioOption]').filter({hasText:name}).click();await ready(p);}
 async function select(p,name,value){const combo=p.getByRole('combobox',{name,exact:true});await combo.click();await combo.press('ArrowDown');await p.getByRole('option',{name:value,exact:true}).click();await ready(p);}
 function sql(statement){execFileSync(python,['-c','import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as c:c.executescript(sys.argv[2])',db,statement]);}
@@ -29,7 +30,7 @@ const p=await browser.newPage({viewport:{width:390,height:844},isMobile:true,has
 await p.goto('http://127.0.0.1:'+port);
 await p.getByRole('textbox',{name:'管理用パスワード'}).fill(adminPassword);
 await p.getByRole('button',{name:'ログイン',exact:true}).click();
-await p.getByRole('button',{name:'乾麺の重さをはかる',exact:true}).waitFor();await inspect(p,'01-home-light');
+await p.locator('.st-key-home_camera button').waitFor();await inspect(p,'01-home-light');
 await p.getByText('カメラを開く・はかりの数値を記録する',{exact:true}).click();
 await click(p,'ブラウザでカメラを開く');await inspect(p,'02-camera');
 await click(p,'カメラが開かない場合は写真から選ぶ');
@@ -40,9 +41,9 @@ await nav(p,'設定');await select(p,'設定メニュー','開発・検証ツー
 await click(p,'この写真で解析する');await inspect(p,'07-weight-result');
 await p.getByText('実測重量も記録する（任意）',{exact:true}).click();await p.getByRole('spinbutton',{name:'実測重量（g）',exact:true}).fill('40');await p.getByRole('spinbutton',{name:'実測重量（g）',exact:true}).press('Tab');await ready(p);
 await click(p,'履歴に保存');await p.getByRole('button',{name:'この乾麺で料理を記録する',exact:true}).waitFor();if(!await p.getByRole('button',{name:'履歴に保存',exact:true}).isDisabled())throw Error('save not disabled');
-await click(p,'この乾麺で料理を記録する');await p.getByRole('textbox',{name:'料理名',exact:true}).fill('テストのトマトパスタ');await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).fill('CGによる授業用テスト');await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).press('Tab');await ready(p);
+await click(p,'この乾麺で料理を記録する');await p.getByRole('textbox',{name:'料理名',exact:true}).fill('テストのトマトパスタ');await p.getByText('食事の区分・ひとこと（任意）',{exact:true}).click();await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).fill('CGによる授業用テスト');await p.getByRole('textbox',{name:'ひとこと（任意）',exact:true}).press('Tab');await ready(p);
 await p.locator('input[type=file]').setInputFiles(path.join(root,'pasta_weight_app_v2/sample_images/demo_spread_12.png'));await ready(p);await inspect(p,'08-meal-editor-photo');
-await nav(p,'ホーム');await click(p,'完成した料理を記録する');if(await p.getByRole('textbox',{name:'料理名',exact:true}).inputValue()!=='テストのトマトパスタ')throw Error('draft lost');await inspect(p,'09-draft-restored');
+await nav(p,'ホーム');await clickKey(p,'home_meal');if(await p.getByRole('textbox',{name:'料理名',exact:true}).inputValue()!=='テストのトマトパスタ')throw Error('draft lost');await inspect(p,'09-draft-restored');
 sql("CREATE TRIGGER reject_test BEFORE INSERT ON meal_entries BEGIN SELECT RAISE(ABORT,'simulated disk failure'); END;");
 await click(p,'食事記録を保存');await p.getByText('保存できませんでした。入力内容は残っています。',{exact:false}).waitFor();await inspect(p,'10-save-failure-retained');
 sql('DROP TRIGGER reject_test;');await click(p,'食事記録を保存');await p.getByRole('button',{name:'記録を編集する',exact:true}).waitFor();await inspect(p,'11-meal-detail');

@@ -7,7 +7,7 @@ from finished_recipe import REFERENCE_DRY_G, calculate_finished_recipe, recipe_d
 from ingredient_ui import render_ingredients
 from ui_shell import dry_weight_label
 
-DRY_LABELS = {'reference': '参考重量', 'actual': '実測重量', 'estimated': '推定重量'}
+DRY_LABELS = {'reference': '参考重量', 'actual': '実測重量', 'estimated': '写真による推定重量'}
 
 
 def begin_recipe(draft, dish, measurements):
@@ -25,8 +25,10 @@ def begin_recipe(draft, dish, measurements):
 
 
 def show_nutrients(label, values):
-    st.write(f"**{label}** · {values['kcal']:.1f} kcal")
-    st.caption(f"たんぱく質 {values['protein_g']:.1f} g / 脂質 {values['fat_g']:.1f} g / 炭水化物 {values['carb_g']:.1f} g")
+    st.markdown(f"**{label}**  \n**{values['kcal']:.1f} kcal**")
+    st.caption(f"たんぱく質 {values['protein_g']:.1f} g  \n"
+               f"脂質 {values['fat_g']:.1f} g  \n"
+               f"炭水化物 {values['carb_g']:.1f} g")
 
 
 def _sync_reference_rows(recipe, before, weight):
@@ -37,27 +39,37 @@ def _sync_reference_rows(recipe, before, weight):
                                   for row in recipe['ingredients']]
 
 
+def _dry_option(ident, measurements):
+    if ident is None:
+        return '標準レシピの参考重量を入力'
+    measurement = measurements.get(ident)
+    if measurement is None:
+        return f'保存済みの乾麺 #{ident}'
+    label = dry_weight_label(measurement)
+    if measurement['actual_g'] is None and measurement['estimated_g'] is not None:
+        label = '写真からの' + label
+    return f'{label} · #{ident}'
+
+
 def render_finished_recipe(draft, measurements):
     recipe = draft['finished_recipe']
     key = f"finished_{draft['id']}_{draft.get('recipe_revision', 0)}"
-    with st.container(border=True):
-        st.subheader('材料と栄養 · '+recipe['dish'])
-        st.caption('材料と分量は標準レシピの参考値です。実際に使った内容に変更できます。')
+    with st.container(key='finished_recipe_editor'):
+        st.caption(f"{recipe['dish']}の標準レシピです。材料と分量は変更できます。")
         selected = draft.get('measurement_id')
         options = [None, *measurements]
         if selected not in options:
             options.append(selected)
         st.selectbox('計算に使う乾麺', options, index=options.index(selected), key=key+'_dry',
-                     format_func=lambda ident: '参考重量を入力' if ident is None else
-                     (f"{dry_weight_label(measurements[ident])} · #{ident}" if ident in measurements
-                      else f'保存済みの乾麺 #{ident}'))
+                     format_func=lambda ident: _dry_option(ident, measurements))
         draft['measurement_id'] = st.session_state[key+'_dry']
         measurement = measurements.get(draft['measurement_id'])
         if draft['measurement_id'] is None:
             recipe['reference_dry_g'] = st.number_input(
                 '乾麺の参考重量（g）', min_value=0.1, value=recipe['reference_dry_g'] or REFERENCE_DRY_G,
                 step=1.0, key=key+'_reference')
-            st.caption('茹でる前の乾麺の参考重量です。実測値やAI推定値ではありません。')
+            st.caption(f'初期値の{REFERENCE_DRY_G:g} gは標準レシピの目安です。'
+                       '実測値やAI推定値ではありません。')
         elif measurement is None:
             st.error('乾麺の記録を開けません。参考重量か、別の記録を選んでください。')
             return False
@@ -72,8 +84,8 @@ def render_finished_recipe(draft, measurements):
         before = draft.get('recipe_weight', weight)
         _sync_reference_rows(recipe, before, weight)
         draft['recipe_weight'] = weight
-        # Weight changes re-scale untouched reference amounts and reset open ingredient controls.
-        render_ingredients(standard_rows(recipe['dish'], weight), key+f'_ingredients_{weight:g}',
+        # Keep the edit buttons reachable during a reference-weight update.
+        render_ingredients(standard_rows(recipe['dish'], weight), key+'_ingredients',
                            rows=recipe['ingredients'])
         if draft.get('recipe_confirmed_basis') != (draft['measurement_id'], weight, recipe['ingredients']):
             st.session_state.pop(key+'_confirmed', None)
@@ -88,6 +100,10 @@ def render_finished_recipe(draft, measurements):
         except ValueError as exc:
             st.error(str(exc))
             return False
-        show_nutrients('料理全体', result['total'])
-        show_nutrients('食べた分', result['portion'])
+        with st.container(key='finished_nutrition_comparison'):
+            total, portion = st.columns(2)
+            with total, st.container(border=True, key='finished_nutrition_total'):
+                show_nutrients('料理全体', result['total'])
+            with portion, st.container(border=True, key='finished_nutrition_portion'):
+                show_nutrients('食べた分', result['portion'])
         return True

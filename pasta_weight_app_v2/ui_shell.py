@@ -62,11 +62,6 @@ def empty_state(title,body):
     st.markdown(f'<div class="pl-empty"><span aria-hidden="true">◌</span><strong>{escape(title)}</strong>{escape(body)}</div>',unsafe_allow_html=True)
 
 
-def hero():
-    st.markdown('''<section class="pl-hero"><div class="pl-eyebrow">YOUR PASTA, YOUR DAY</div>
-<h1>今日のパスタを、もっと手軽に。</h1><p>写真から重さをチェックして、<br class="pl-mobile-break">毎日のひと皿を記録しよう。</p></section>''',unsafe_allow_html=True)
-
-
 def persist_appearance():
     st.session_state['theme_preference']=st.session_state['appearance']
 
