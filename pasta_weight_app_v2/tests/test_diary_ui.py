@@ -92,12 +92,14 @@ caption=lambda text: any(text in w.value for w in at.caption)
 select('標準レシピの料理').set_value('カルボナーラ').run()
 at.button(key='meal_use_recipe').click().run()
 assert not at.exception and number('乾麺の参考重量（g）').value==80
+assert next(w for w in at.text_input if w.label=='料理名').value=='カルボナーラ'
 assert caption('実測値やAI推定値ではありません')
 number('乾麺の参考重量（g）').set_value(100).run()
 number('食べた割合（%）').set_value(50).run()
 next(w for w in at.checkbox if w.label=='実際に使った材料と分量を確認しました').check().run()
 assert any('料理全体' in w.value and '638.3 kcal' in w.value for w in at.markdown)
 assert any('食べた分' in w.value and '319.' in w.value for w in at.markdown)
+assert next(w for w in at.text_input if w.label=='料理名').value=='カルボナーラ'
 at.button(key='meal_save').click().run()
 assert not at.exception and len(entries())==1
 row=entries()[0]
@@ -135,20 +137,28 @@ class MockVision:
     def predict(self, rgb):
         st.session_state['recognition_runs']=st.session_state.get('recognition_runs',0)+1
         return SimpleNamespace(name='トマトパスタ', visible_options=())
-dish_vision_ui._classifier=lambda *args: MockVision()
+dish_vision_ui._classifier=lambda checkpoint, device: MockVision()
 draft=st.session_state.setdefault('meal', {'id':'capture-fixture'})
-selected=dish_vision_ui.render_dish_choice(np.zeros((30,30,3), np.uint8), draft)
+rgb=np.zeros((30,30,3), np.uint8) if st.checkbox('test-photo') else None
+selected=dish_vision_ui.render_dish_choice(rgb, draft)
 st.write(selected)
 """).run()
+at.toggle[0].set_value(False).run()
+at.checkbox[0].check().run()
+assert not at.exception and 'recognition_runs' not in at.session_state
+at.toggle[0].set_value(True).run()
 assert not at.exception and at.session_state['recognition_runs']==1
 assert at.selectbox[0].value=='トマトパスタ'
 assert at.selectbox[0].options==['料理を選ぶ（任意）', 'カルボナーラ', 'トマトパスタ', 'ジェノベーゼ']
 at.selectbox[0].set_value('ジェノベーゼ').run()
 assert not at.exception and at.selectbox[0].value=='ジェノベーゼ'
+at.toggle[0].set_value(False).run()
+assert at.selectbox[0].value=='ジェノベーゼ' and not at.info
 assert at.session_state['recognition_runs']==1
 '''
     result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
                             env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data'),
-                                     PASTA_OPENCLIP_CHECKPOINT=str(__file__)),
+                                     PASTA_OPENCLIP_CHECKPOINT=str(__file__),
+                                     PASTA_DISH_HEAD_PATH=str(tmp_path/'invalid_research_artifact.json')),
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

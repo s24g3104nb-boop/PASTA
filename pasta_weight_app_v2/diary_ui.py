@@ -151,9 +151,22 @@ def _field(widget, label, draft, field, **kwargs):
                   args=(draft['id'], field, key), **kwargs)
 
 
+def _apply_finished_recipe(draft, dish, measurements):
+    try:
+        begin_recipe(draft, dish, measurements)
+    except ValueError as exc:
+        draft['recipe_apply_error'] = str(exc)
+        return
+    draft['dish_name'] = dish
+    st.session_state['meal_dish_name_'+draft['id']] = dish
+    draft['photo_name_confirmed'] = (
+        draft.get('photo_recognition_enabled', True)
+        and dish == getattr(draft.get('photo_suggestion'), 'name', None)
+    )
+
+
 def _reset_photo_analysis(draft):
-    for field in ('photo_suggestion', 'photo_analyzed', 'photo_analysis_failed',
-                  'photo_analysis_unavailable', 'photo_rgb'):
+    for field in ('photo_suggestion', 'photo_analyzed', 'photo_analysis_failed', 'photo_rgb'):
         draft.pop(field, None)
     draft['photo_name_confirmed'] = False
     st.session_state.pop('meal_dish_candidate_'+draft['id'], None)
@@ -386,11 +399,11 @@ def _render_editor(db_path):
             if selected_dish and selected_dish != draft.get('finished_recipe', {}).get('dish'):
                 if draft.get('finished_recipe'):
                     st.caption('標準レシピを切り替えると、材料と分量は新しい参考値になります。')
-                if st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch'):
-                    begin_recipe(draft, selected_dish, measurements)
-                    draft['dish_name'] = selected_dish
-                    draft['photo_name_confirmed'] = selected_dish == getattr(draft.get('photo_suggestion'), 'name', None)
-                    st.session_state.pop('meal_dish_name_'+draft['id'], None)
+                st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch',
+                          on_click=_apply_finished_recipe, args=(draft, selected_dish, measurements))
+            error = draft.pop('recipe_apply_error', None)
+            if error:
+                st.warning(error)
             if draft.get('finished_recipe'):
                 valid_recipe = render_finished_recipe(draft, measurements)
     except (sqlite3.Error, OSError, ValueError) as exc:
