@@ -20,6 +20,9 @@ SEGMENTATION = 'opencv_hsv_lab_spread_960'
 AREA_FEATURES = ('image_fraction', 'pasta_or_dark_fraction', 'area_over_length_squared')
 MODEL_PATH = Path(__file__).with_name(f'{ESTIMATOR}.json')
 MIN_LONG_SIDE = 640
+MAX_THICKNESS_RATIO = .018
+MAX_MASK_FRACTION = .73
+EDGE_NAMES = ('top', 'bottom', 'left', 'right')
 THICK_CAPTURE_REASON = '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
 EDGE_CAPTURE_REASON = '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
 # Small rasterization changes near a calibration endpoint should not cause
@@ -41,6 +44,28 @@ class Estimate:
     reason: str
     observation: Observation
     area_feature: str | None = None
+
+
+@dataclass(frozen=True)
+class EdgeContact:
+    """One run on a side, with inclusive zero-based coordinates along that side."""
+
+    side: str
+    retained: bool
+    component: int
+    start: int
+    end: int
+    component_pixels: int
+    inward_px: int
+
+
+@dataclass(frozen=True)
+class EdgeDiagnostic:
+    overlay: np.ndarray
+    contacts: tuple[EdgeContact, ...]
+    mask_fraction: float
+    thickness_ratio: float | None
+    density_rejected: bool
 
 
 @dataclass(frozen=True)
@@ -96,7 +121,7 @@ def _pasta_components(scene):
     edge_count[0] = 0
     edge = np.flatnonzero(edge_count)
     if not edge.size:
-        return labels, keep, []
+        return labels, keep, stats, []
 
     # Consider even sub-30px edge components: a thin, disconnected tip can
     # otherwise disappear before the clipping check.
@@ -112,7 +137,7 @@ def _pasta_components(scene):
     if areas[ignore].sum() > .005 * areas[keep].sum():
         ignore = []
     keep[ignore] = False
-    return labels, keep, ignore
+    return labels, keep, stats, ignore
 
 
 def _isolated_border_noise(labels, stats, edge_count, edge_hits, horizontal, lab, interior):
@@ -179,21 +204,42 @@ def _has_reflection_halo(lab, x, y, width, height, horizontal):
 
 
 def pasta_mask(scene):
-    labels, keep, _ = _pasta_components(scene)
+    labels, keep, _, _ = _pasta_components(scene)
     return keep[labels]
 
 
-def edge_diagnostic_overlay(rgb):
-    """Overlay the retained mask, removed edge components, and retained edge pixels."""
+def _contact_runs(labels, keep, stats):
+    for side, edge in zip(EDGE_NAMES, _edge_sides(labels)):
+        # Split adjacent labels as well as gaps so each run can be traced to
+        # exactly one connected component. A corner belongs to both sides.
+        bounds = np.r_[0, np.flatnonzero(edge[1:] != edge[:-1]) + 1, edge.size]
+        inward = cv2.CC_STAT_HEIGHT if side in ('top', 'bottom') else cv2.CC_STAT_WIDTH
+        for start, stop in zip(bounds[:-1], bounds[1:]):
+            component = int(edge[start])
+            if component:
+                yield EdgeContact(side, bool(keep[component]), component, int(start), int(stop - 1),
+                                  int(stats[component, cv2.CC_STAT_AREA]), int(stats[component, inward]))
+
+
+def diagnose(rgb):
+    """Report the same retained foreground used for estimation, including secondary density evidence."""
     scene = canonical_image(rgb)
-    labels, keep, ignored = _pasta_components(scene)
+    labels, keep, stats, ignored = _pasta_components(scene)
     mask = keep[labels]
     overlay = scene.copy()
     overlay[mask] = np.rint(.55 * scene[mask] + .45 * np.array([0, 235, 80])).astype(np.uint8)
     overlay[np.isin(labels, ignored)] = (255, 154, 32)
     for pixels, contacts in zip(_edge_sides(overlay), _edge_sides(mask)):
         pixels[contacts] = (255, 32, 56)
-    return overlay
+    geometry = mask_geometry(mask)
+    fraction = geometry['mask_fraction']
+    ratio, dense = _density_evidence(mask, geometry['quantile_length_px'], fraction)
+    return EdgeDiagnostic(overlay, tuple(_contact_runs(labels, keep, stats)), fraction, ratio, dense)
+
+
+def edge_diagnostic_overlay(rgb):
+    """Overlay the retained mask, removed edge components, and retained edge pixels."""
+    return diagnose(rgb).overlay
 
 
 def describe_mask(scene, mask):
@@ -211,17 +257,30 @@ def describe_mask(scene, mask):
                        float(geometry['area_over_length_squared']), reason)
 
 
+def _too_little_foreground(fraction, length):
+    return fraction < .025 or length < 25
+
+
+def _density_evidence(mask, length, fraction):
+    if _too_little_foreground(fraction, length):
+        return None, False
+    thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    upper_quartile = float(np.quantile(thickness[mask], .75))
+    rejected = upper_quartile > MAX_THICKNESS_RATIO * length or fraction > MAX_MASK_FRACTION
+    return float(upper_quartile / length), bool(rejected)
+
+
 def mask_capture_reason(mask, length, *, dark_fraction=None):
     """Shared framing and shape checks, with a dark-background check for the shipped model."""
     if any(side.any() for side in _edge_sides(mask)):
         return EDGE_CAPTURE_REASON
     fraction = np.count_nonzero(mask) / mask.size
-    if fraction < .025 or length < 25:
+    if _too_little_foreground(fraction, length):
         return '乾麺の領域が少なすぎます。麺をもう少し大きく写してください。'
     if dark_fraction is not None and dark_fraction < .09:
         return '暗く無地の背景に置き、反射を避けてください。'
-    thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
-    if np.quantile(thickness[mask], .75) > .018 * length or fraction > .73:
+    _, density_rejected = _density_evidence(mask, length, fraction)
+    if density_rejected:
         return THICK_CAPTURE_REASON
     return ''
 

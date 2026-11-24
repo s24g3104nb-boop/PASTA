@@ -18,11 +18,14 @@ from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
-from sheetless_area import AREA_BOUNDARY_TOLERANCE_G, EDGE_CAPTURE_REASON, ESTIMATOR as AREA_ESTIMATOR
-from sheetless_area import edge_diagnostic_overlay, estimate as estimate_area
+from sheetless_area import (AREA_BOUNDARY_TOLERANCE_G, EDGE_CAPTURE_REASON, ESTIMATOR as AREA_ESTIMATOR,
+                            MAX_MASK_FRACTION, MAX_THICKNESS_RATIO, THICK_CAPTURE_REASON, diagnose)
+from sheetless_area import estimate as estimate_area
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
+
+_EDGE_SIDE_LABELS = {'top': '上端', 'bottom': '下端', 'left': '左端', 'right': '右端'}
 
 
 def _remember_mode():
@@ -270,21 +273,81 @@ def _optional_result_product(request):
     return product
 
 
+def _edge_contact_tables(diagnostic):
+    summary = []
+    for side, label in _EDGE_SIDE_LABELS.items():
+        row = {'画像の辺': label}
+        for retained, prefix in ((True, '残した'), (False, '除いた')):
+            contacts = [contact for contact in diagnostic.contacts
+                        if contact.side == side and contact.retained == retained]
+            row[f'{prefix}成分数'] = len({contact.component for contact in contacts})
+            row[f'{prefix}接触画素数'] = sum(contact.end - contact.start + 1 for contact in contacts)
+        summary.append(row)
+    st.dataframe(summary, hide_index=True, width='stretch')
+    if not diagnostic.contacts:
+        st.caption('画像の端に触れた候補はありません。')
+        return
+
+    height, width = diagnostic.overlay.shape[:2]
+    st.caption(f'解析画像は幅 {width} × 高さ {height} px です。左上を (0, 0) とし、x は右へ、y は下へ増えます。'
+               '接触区間は両端を含みます。角の画素や複数の辺に触れた成分は、触れた辺ごとに数えます。')
+    runs = []
+    for contact in diagnostic.contacts:
+        if contact.side in ('top', 'bottom'):
+            y = 0 if contact.side == 'top' else height - 1
+            start, end = (contact.start, y), (contact.end, y)
+        else:
+            x = 0 if contact.side == 'left' else width - 1
+            start, end = (x, contact.start), (x, contact.end)
+        runs.append({
+            '画像の辺': _EDGE_SIDE_LABELS[contact.side],
+            '判定': '残した' if contact.retained else '除いた',
+            '接触区間 (x, y)': f'{start}～{end}',
+            '成分 ID': contact.component,
+            '接触画素数': contact.end - contact.start + 1,
+            '成分全体の画素数': contact.component_pixels,
+            '端から内側への長さ (px)': contact.inward_px,
+        })
+    st.dataframe(runs, hide_index=True, width='stretch', height=240)
+
+
+def _show_density_diagnostic(diagnostic):
+    ratio = diagnostic.thickness_ratio
+    if ratio is None:
+        st.caption('候補領域が小さいため、麺の重なりや密集を判定できませんでした。')
+        return
+    st.caption(f'密集の判定に使った値は、画像全体に対する候補面積が {diagnostic.mask_fraction:.2%}'
+               f'（上限 {MAX_MASK_FRACTION:.0%}）、候補の長さに対する厚みの指標が {ratio:.2%}'
+               f'（上限 {MAX_THICKNESS_RATIO:.1%}）です。')
+    if diagnostic.density_rejected:
+        limits = []
+        if diagnostic.mask_fraction > MAX_MASK_FRACTION:
+            limits.append('候補面積')
+        if ratio > MAX_THICKNESS_RATIO:
+            limits.append('厚みの指標')
+        detail = f"{'と'.join(limits)}が上限を超えました。" if limits else ''
+        st.warning(detail + THICK_CAPTURE_REASON)
+
+
 def _show_area_diagnostic(request):
     with st.expander('乾麺の抽出結果を見る'):
-        if '_area_overlay' not in request:
+        if '_area_diagnostic' not in request:
             try:
-                request['_area_overlay'] = edge_diagnostic_overlay(request['rgb'])
+                request['_area_diagnostic'] = diagnose(request['rgb'])
             except Exception:
                 log_error(WEIGHT, '乾麺の抽出結果の可視化 失敗')
-                request['_area_overlay'] = None
-        overlay = request['_area_overlay']
-        if overlay is None:
+                request['_area_diagnostic'] = None
+        diagnostic = request['_area_diagnostic']
+        if diagnostic is None:
             st.caption('この写真の抽出結果を表示できませんでした。')
-            return
-        st.image(overlay, caption='解析に使った写真に抽出結果を重ねています。',
+            return None
+        st.image(diagnostic.overlay, caption='解析に使った写真に抽出結果を重ねています。',
                  width='stretch', output_format='PNG')
-        st.caption('緑は乾麺の候補、オレンジは判定から除いた画像端の候補、赤は見切れの可能性がある画像端の候補です。')
+        st.caption('緑は乾麺の候補、オレンジは判定から除いた画像端の候補、赤は見切れの可能性がある画像端の候補です。'
+                   '画像端の赤い画素が縮小表示で見えにくい場合は、表の接触区間で位置を確認できます。')
+        _edge_contact_tables(diagnostic)
+        _show_density_diagnostic(diagnostic)
+        return diagnostic
 
 
 def render_results(request):
@@ -323,8 +386,7 @@ def render_results(request):
     if st.session_state.pop('capture_product_refreshed', False):
         st.info('製品情報が更新されました。新しい校正値による結果を確認してください。')
     use_area = not admin and not using_demo and not using_regression and mode == '広げた状態'
-    if use_area:
-        _show_area_diagnostic(request)
+    area_diagnostic = _show_area_diagnostic(request) if use_area else None
     if not using_demo:
         if '_quality_warnings' not in request:
             request['_quality_warnings'] = image_quality_warnings(rgb)
@@ -363,10 +425,22 @@ def render_results(request):
                                  diagnostics=diagnostics, explanation='乾麺の可視面積による概算')
             return
         area_reason = area.reason if area is not None else '面積の解析を完了できませんでした。'
-        if area_reason == EDGE_CAPTURE_REASON:
-            _log_estimate_outcome(request, '写真の見切れを確認して重量推定を見送り')
-            st.warning('写真の端で麺が切れている可能性があるため、重さを推定できませんでした。'
-                       '麺全体が入るように撮り直すか、下に実測重量を入力してください。')
+        if area_reason in (EDGE_CAPTURE_REASON, THICK_CAPTURE_REASON):
+            if area_reason == EDGE_CAPTURE_REASON:
+                _log_estimate_outcome(request, '写真の見切れを確認して重量推定を見送り')
+                message = '写真の端で麺が切れている可能性があるため、重さを推定できませんでした。'
+                if area_diagnostic is not None:
+                    touched = {contact.side for contact in area_diagnostic.contacts if contact.retained}
+                    sides = '・'.join(label for side, label in _EDGE_SIDE_LABELS.items() if side in touched)
+                    if sides:
+                        message += f'{sides}に触れた乾麺の候補があります。'
+                    if area_diagnostic.density_rejected:
+                        message += '麺の候補が密集していて、重なりを判断できません。隙間を作って平らに広げてください。'
+                message += '麺全体が入るように撮り直すか、下に実測重量を入力してください。'
+            else:
+                _log_estimate_outcome(request, '麺の重なり・密集を確認して重量推定を見送り')
+                message = THICK_CAPTURE_REASON + '撮り直すか、下に実測重量を入力してください。'
+            st.warning(message)
             if 'saved_product' not in request:
                 product = _optional_result_product(request)
             recovery(product, rgb, synthetic=using_demo)

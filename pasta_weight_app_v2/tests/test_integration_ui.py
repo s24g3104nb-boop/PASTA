@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 def run_app_script(script, tmp_path):
     result = subprocess.run(
@@ -164,8 +166,9 @@ assert at.button(key='manual_weight_save') and at.button(key='recovery_retake')
 ''', tmp_path)
 
 
-def test_clipped_spread_shows_diagnostic_and_saves_measured_weight(tmp_path):
-    run_app_script(r'''
+@pytest.mark.parametrize('touches_border', [False, True])
+def test_dense_spread_shows_diagnostic_and_saves_measured_weight(tmp_path, touches_border):
+    run_app_script(f'touches_border = {touches_border}\n' + r'''
 from io import BytesIO
 import sys
 
@@ -181,28 +184,48 @@ at = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
 product = save_product('合成テスト用の校正済み製品', .68, 350, 12, 2, 70)
 at.session_state['last_product_id'] = product['id']
 at.button(key='home_camera').click().run()
-image = np.full((480, 640, 3), 42, np.uint8)
-for y in range(60, 420, 10):
-    image[y:y + 5, 64:576] = (220, 180, 40)
-image[60:65, :64] = (220, 180, 40)
+image = np.full((720, 960, 3), 42, np.uint8)
+left = 0 if touches_border else 96
+image[100:210, left:864] = (220, 180, 40)
+image[296:304, 96:864] = (220, 180, 40)
+image[:2, 450:453] = (220, 180, 40)
 photo = BytesIO()
 Image.fromarray(image).save(photo, 'PNG')
 at.session_state['capture_photo'] = photo
 
 def must_not_count(*args, **kwargs):
-    raise AssertionError('見切れた写真を登録製品の本数換算に回しました')
+    raise AssertionError('推定を見送る写真を登録製品の本数換算に回しました')
 
 capture_ui.detect_spread = must_not_count
 at.run()
 assert not at.exception and not at.error
 assert at.selectbox(key='which_product').value == product['id']
-assert any('写真の端で麺が切れている可能性' in warning.value for warning in at.warning)
+edge_warnings = [warning.value for warning in at.warning if '写真の端で麺が切れている可能性' in warning.value]
+if touches_border:
+    assert any('左端' in warning and '候補が密集' in warning for warning in edge_warnings)
+else:
+    assert not edge_warnings
+    assert any('重なりを減らして' in warning.value and '実測重量' in warning.value for warning in at.warning)
 assert not any('推定重量' in metric.label for metric in at.metric)
 assert at.button(key='recovery_retake')
 diagnostic = next(expander for expander in at.expander if expander.label == '乾麺の抽出結果を見る')
 assert diagnostic.get('image') or diagnostic.get('imgs')
 assert any(all(color in caption.value for color in ('緑', 'オレンジ', '赤'))
            for caption in diagnostic.caption)
+assert any('厚みの指標が上限を超えました' in warning.value for warning in diagnostic.warning)
+summary, runs = (table.value for table in diagnostic.dataframe)
+summary = summary.set_index('画像の辺')
+assert set(summary.index) == {'上端', '下端', '左端', '右端'}
+assert summary.loc['上端', '除いた成分数'] == 1
+assert summary.loc['上端', '除いた接触画素数'] == 3
+assert summary.loc['左端', '残した成分数'] == int(touches_border)
+assert summary.loc['左端', '残した接触画素数'] == (110 if touches_border else 0)
+top_run, = runs.loc[runs['画像の辺'] == '上端'].to_dict('records')
+assert top_run['接触区間 (x, y)'] == '(450, 0)～(452, 0)'
+assert top_run['成分全体の画素数'] == 6 and top_run['端から内側への長さ (px)'] == 2
+if touches_border:
+    left_run, = runs.loc[runs['画像の辺'] == '左端'].to_dict('records')
+    assert left_run['接触区間 (x, y)'] == '(0, 100)～(0, 209)'
 
 weight_input = next(widget for widget in at.number_input if widget.label == 'はかりで測った実測重量（g）')
 weight_input.set_value(40.).run()

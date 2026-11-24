@@ -1,5 +1,7 @@
 """Synthetic regression fixtures for the shipped area-only estimator."""
 from io import BytesIO
+import json
+import sys
 
 import cv2
 import numpy as np
@@ -7,6 +9,7 @@ import pytest
 from PIL import Image
 
 from pasta_weight_app_v2 import sheetless_area
+from pasta_weight_app_v2.experiments.diagnose_sheetless_photo import main as diagnose_photo_file
 from pasta_weight_app_v2.pasta_vision import image_to_rgb
 from pasta_weight_app_v2.sheetless_area import AreaModel, Observation, estimate
 
@@ -137,6 +140,68 @@ def test_overlay_shows_retained_foreground_ignored_streak_and_exact_contact():
     np.testing.assert_array_equal(overlay[401, 0], (255, 32, 56))
     assert not np.array_equal(overlay[401, 50], photo[401, 50])
     np.testing.assert_array_equal(overlay[0, 0], photo[0, 0])
+
+
+def test_diagnostic_reports_exact_edge_runs_and_distinct_components():
+    photo = cv2.resize(spread(36), (960, 720), interpolation=cv2.INTER_NEAREST)
+    yellow = (220, 180, 40)
+    # One component touches twice, another once.
+    photo[:25, 220:224] = yellow
+    photo[:25, 260:264] = yellow
+    photo[24:28, 220:264] = yellow
+    photo[:25, 340:344] = yellow
+    photo[230:280, -4:] = (175, 158, 121)
+    photo[230:280, -8:-4] = (155, 147, 125)
+
+    diagnosis = sheetless_area.diagnose(photo)
+    top = [contact for contact in diagnosis.contacts if contact.side == 'top']
+    assert [(contact.start, contact.end) for contact in top] == [(220, 223), (260, 263), (340, 343)]
+    assert all(contact.retained and contact.inward_px >= 25 for contact in top)
+    assert top[0].component == top[1].component != top[2].component
+    assert top[0].component_pixels == top[1].component_pixels
+    assert diagnosis.contacts[-1].side == 'right'
+    assert (diagnosis.contacts[-1].start, diagnosis.contacts[-1].end) == (230, 279)
+    assert not diagnosis.contacts[-1].retained
+    assert diagnosis.contacts[-1].inward_px == 4
+    assert estimate(photo).reason == sheetless_area.EDGE_CAPTURE_REASON
+
+
+def test_diagnostic_exposes_density_even_when_the_estimator_reports_edge_first():
+    photo = np.full((720, 960, 3), 42, np.uint8)
+    photo[170:470, 96:900] = (220, 180, 40)
+    assert estimate(photo).reason == sheetless_area.THICK_CAPTURE_REASON
+    photo[190:195, 900:] = (220, 180, 40)
+    assert estimate(photo).reason == sheetless_area.EDGE_CAPTURE_REASON
+
+    diagnosis = sheetless_area.diagnose(photo)
+    assert diagnosis.density_rejected
+    assert diagnosis.thickness_ratio > sheetless_area.MAX_THICKNESS_RATIO
+    right, = diagnosis.contacts
+    assert (right.side, right.start, right.end, right.inward_px) == ('right', 190, 194, 864)
+
+
+def test_diagnostic_has_no_density_measurement_without_foreground():
+    photo = np.full((480, 640, 3), 42, np.uint8)
+    diagnosis = sheetless_area.diagnose(photo)
+    assert not diagnosis.contacts and not diagnosis.density_rejected
+    assert diagnosis.thickness_ratio is None and diagnosis.mask_fraction == 0
+
+
+def test_file_diagnostic_exports_counts_and_density_as_json(tmp_path, monkeypatch, capsys):
+    photo = np.full((720, 960, 3), 42, np.uint8)
+    photo[100:210, 96:] = (220, 180, 40)
+    photo[:2, 450:453] = (220, 180, 40)
+    path = tmp_path / 'synthetic photo.png'
+    Image.fromarray(photo).save(path)
+    monkeypatch.setattr(sys, 'argv', ['diagnose_sheetless_photo', str(path)])
+
+    diagnose_photo_file()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report['analysis_size'] == {'width': 960, 'height': 720}
+    assert report['by_side']['right']['retained'] == {'components': 1, 'pixels': 110}
+    assert report['by_side']['top']['excluded'] == {'components': 1, 'pixels': 3}
+    assert report['density_rejected'] is True and report['area_weight_g'] is None
 
 
 @pytest.mark.parametrize('quality', [85, 95])
