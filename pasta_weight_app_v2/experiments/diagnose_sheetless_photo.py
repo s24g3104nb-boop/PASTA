@@ -1,4 +1,4 @@
-"""Analyze a local photo with the same decoder and area gates used by Pasta Lens."""
+"""Analyze a local photo with the same decoder and weight calculation used by Pasta Lens."""
 
 import argparse
 from dataclasses import asdict
@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from ..pasta_vision import image_quality_warnings, image_to_rgb
-from ..sheetless_area import EDGE_NAMES, MAX_MASK_FRACTION, MAX_THICKNESS_RATIO, diagnose, estimate
+from ..sheetless_area import EDGE_NAMES, MAX_MASK_FRACTION, MAX_THICKNESS_RATIO, diagnose, estimate, observe
 
 
 def main():
@@ -38,9 +38,11 @@ def main():
         'thickness_ratio': diagnostic.thickness_ratio,
         'max_thickness_ratio': MAX_THICKNESS_RATIO,
         'density_rejected': diagnostic.density_rejected,
+        'capture_reason': observe(rgb).reason,
         'area_reason': result.reason,
         'quality_warnings': warnings,
-        'area_weight_g': None if warnings else result.weight_g,
+        'area_weight_g': result.weight_g,
+        'extrapolated': result.extrapolated,
     }, ensure_ascii=False, indent=2))
 
 

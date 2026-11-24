@@ -32,7 +32,7 @@ if st.radio('画面', ['料理', 'ホーム'], key='page') == '料理':
     assert not app.exception and caption_contains('初期値の80 gは標準レシピの目安')
     dry = 'finished_meal_1_dry'
     assert app.selectbox(key=dry).options == [
-        '標準レシピの参考重量を入力', '実測 92 g · #1', '写真からの推定 65 g · #2',
+        '標準レシピの参考重量を入力', '実測 92 g · #1', '推定 65 g · #2',
     ]
     app.number_input(key='finished_meal_1_reference').set_value(100).run()
     app.number_input(key='finished_meal_1_portion').set_value(50).run()
@@ -57,4 +57,4 @@ if st.radio('画面', ['料理', 'ホーム'], key='page') == '料理':
     app.selectbox(key=dry).set_value(1).run()
     assert caption_contains('実測重量 92 g')
     app.selectbox(key=dry).set_value(2).run()
-    assert caption_contains('写真による推定重量 65 g')
+    assert caption_contains('記録した概算重量 65 g')

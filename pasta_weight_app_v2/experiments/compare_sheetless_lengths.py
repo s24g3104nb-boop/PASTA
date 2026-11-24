@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from ..pasta_vision import image_quality_warnings, image_to_rgb
-from ..sheetless_area import _load_model, canonical_image, describe_mask, estimate, estimate_observation
+from ..sheetless_area import _load_model, canonical_image, describe_mask, estimate_checked, estimate_observation
 from .sheetless_lengths import measure
 
 
@@ -106,7 +106,7 @@ def compare(entries, mobile_masks=None):
         raise ValueError('Every original must occur exactly once')
     images = [_load_verified(entry) for entry in entries]
     observations = [measure(rgb) for rgb in images]
-    old = [estimate(rgb) for rgb in images]
+    old = [estimate_checked(rgb) for rgb in images]
     quality = [image_quality_warnings(rgb) for rgb in images]
     # Use the same four supported measured originals for the comparisons.
     reference = [i for i, e in enumerate(entries) if e['label'] == 'user_reported_measured'
@@ -146,7 +146,7 @@ def compare(entries, mobile_masks=None):
             for name, modified in _variants(rgb).items():
                 other = measure(modified)
                 other_values = other.vector()
-                old_variant = estimate(modified)
+                old_variant = estimate_checked(modified)
                 variation['A'].setdefault(name, []).append(
                     [abs(model_a.predict(other.area_ratio)-v2.weight_g), old_variant.weight_g is not None])
                 for method, model in models.items():

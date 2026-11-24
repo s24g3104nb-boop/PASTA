@@ -18,8 +18,8 @@ from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
-from sheetless_area import (AREA_BOUNDARY_TOLERANCE_G, EDGE_CAPTURE_REASON, ESTIMATOR as AREA_ESTIMATOR,
-                            MAX_MASK_FRACTION, MAX_THICKNESS_RATIO, THICK_CAPTURE_REASON, diagnose)
+from sheetless_area import (ESTIMATOR as AREA_ESTIMATOR,
+                            MAX_MASK_FRACTION, MAX_THICKNESS_RATIO, diagnose)
 from sheetless_area import estimate as estimate_area
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -316,17 +316,11 @@ def _show_density_diagnostic(diagnostic):
     if ratio is None:
         st.caption('候補領域が小さいため、麺の重なりや密集を判定できませんでした。')
         return
-    st.caption(f'密集の判定に使った値は、画像全体に対する候補面積が {diagnostic.mask_fraction:.2%}'
-               f'（上限 {MAX_MASK_FRACTION:.0%}）、候補の長さに対する厚みの指標が {ratio:.2%}'
-               f'（上限 {MAX_THICKNESS_RATIO:.1%}）です。')
+    st.caption(f'解析用の画像では、画像全体に対する候補面積が {diagnostic.mask_fraction:.2%}'
+               f'（密集の目安 {MAX_MASK_FRACTION:.0%}）、候補の長さに対する厚みの指標が {ratio:.2%}'
+               f'（密集の目安 {MAX_THICKNESS_RATIO:.1%}）です。')
     if diagnostic.density_rejected:
-        limits = []
-        if diagnostic.mask_fraction > MAX_MASK_FRACTION:
-            limits.append('候補面積')
-        if ratio > MAX_THICKNESS_RATIO:
-            limits.append('厚みの指標')
-        detail = f"{'と'.join(limits)}が上限を超えました。" if limits else ''
-        st.warning(detail + THICK_CAPTURE_REASON)
+        st.caption('麺の候補が密集しています。見えている面積で重さを概算するため、重なりがあると誤差が出ます。')
 
 
 def _show_area_diagnostic(request):
@@ -340,14 +334,45 @@ def _show_area_diagnostic(request):
         diagnostic = request['_area_diagnostic']
         if diagnostic is None:
             st.caption('この写真の抽出結果を表示できませんでした。')
-            return None
+            return
         st.image(diagnostic.overlay, caption='解析に使った写真に抽出結果を重ねています。',
                  width='stretch', output_format='PNG')
         st.caption('緑は乾麺の候補、オレンジは判定から除いた画像端の候補、赤は見切れの可能性がある画像端の候補です。'
                    '画像端の赤い画素が縮小表示で見えにくい場合は、表の接触区間で位置を確認できます。')
         _edge_contact_tables(diagnostic)
         _show_density_diagnostic(diagnostic)
-        return diagnostic
+
+
+def _render_area_result(request, product) -> str | None:
+    """Return the calculation failure when the count fallback is needed."""
+    rgb = request['rgb']
+    _show_area_diagnostic(request)
+    if '_area_estimate' not in request:
+        try:
+            with st.spinner('写真から乾麺の面積を調べています…'):
+                request['_area_estimate'] = estimate_area(rgb)
+        except Exception:
+            log_error(WEIGHT, '面積による重量推定 失敗')
+            request['_area_estimate'] = None
+    area = request['_area_estimate']
+    if area is None or area.weight_g is None:
+        return area.reason if area is not None else '面積の解析を完了できませんでした。'
+    if 'saved_product' not in request:
+        product = _optional_result_product(request)
+    _log_estimate_outcome(request, '面積による重量推定 完了')
+    diagnostics = trace(
+        rgb, estimator=AREA_ESTIMATOR, product=product, mode=request['mode'],
+        raw_sha256=request.get('raw_sha256'),
+        parameters=dict(feature=area.area_feature,
+                        area_ratio=getattr(area.observation, area.area_feature),
+                        extrapolated=area.extrapolated,
+                        isolated_border_speck_filter=True),
+    )
+    render_weight_result(weight=area.weight_g, product=product, rgb=rgb, mode=request['mode'],
+                         using_demo=False, detected_count=0, estimator=AREA_ESTIMATOR,
+                         diagnostics=diagnostics, explanation='乾麺の可視面積による概算',
+                         extrapolated=area.extrapolated)
+    return None
 
 
 def render_results(request):
@@ -385,8 +410,11 @@ def render_results(request):
             st.rerun()
     if st.session_state.pop('capture_product_refreshed', False):
         st.info('製品情報が更新されました。新しい校正値による結果を確認してください。')
-    use_area = not admin and not using_demo and not using_regression and mode == '広げた状態'
-    area_diagnostic = _show_area_diagnostic(request) if use_area else None
+    area_reason = None
+    if not admin and not using_demo and not using_regression and mode == '広げた状態':
+        area_reason = _render_area_result(request, product)
+        if area_reason is None:
+            return
     if not using_demo:
         if '_quality_warnings' not in request:
             request['_quality_warnings'] = image_quality_warnings(rgb)
@@ -399,51 +427,6 @@ def render_results(request):
             if not admin and 'saved_product' not in request:
                 product = _optional_result_product(request)
             recovery(product,rgb,synthetic=using_demo)
-            return
-    area_reason = None
-    if use_area:
-        if '_area_estimate' not in request:
-            try:
-                with st.spinner('写真から乾麺の面積を調べています…'):
-                    request['_area_estimate'] = estimate_area(rgb)
-            except Exception:
-                log_error(WEIGHT, '面積による重量推定 失敗')
-                request['_area_estimate'] = None
-        area = request['_area_estimate']
-        if area is not None and area.weight_g is not None:
-            if 'saved_product' not in request:
-                product = _optional_result_product(request)
-            _log_estimate_outcome(request, '面積による重量推定 完了')
-            diagnostics = trace(rgb, estimator=AREA_ESTIMATOR, product=product, mode=mode,
-                                raw_sha256=request.get('raw_sha256'),
-                                parameters=dict(feature=area.area_feature,
-                                                area_ratio=getattr(area.observation, area.area_feature),
-                                                isolated_border_speck_filter=True,
-                                                boundary_tolerance_g=AREA_BOUNDARY_TOLERANCE_G))
-            render_weight_result(weight=area.weight_g, product=product, rgb=rgb, mode=mode,
-                                 using_demo=False, detected_count=0, estimator=AREA_ESTIMATOR,
-                                 diagnostics=diagnostics, explanation='乾麺の可視面積による概算')
-            return
-        area_reason = area.reason if area is not None else '面積の解析を完了できませんでした。'
-        if area_reason in (EDGE_CAPTURE_REASON, THICK_CAPTURE_REASON):
-            if area_reason == EDGE_CAPTURE_REASON:
-                _log_estimate_outcome(request, '写真の見切れを確認して重量推定を見送り')
-                message = '写真の端で麺が切れている可能性があるため、重さを推定できませんでした。'
-                if area_diagnostic is not None:
-                    touched = {contact.side for contact in area_diagnostic.contacts if contact.retained}
-                    sides = '・'.join(label for side, label in _EDGE_SIDE_LABELS.items() if side in touched)
-                    if sides:
-                        message += f'{sides}に触れた乾麺の候補があります。'
-                    if area_diagnostic.density_rejected:
-                        message += '麺の候補が密集していて、重なりを判断できません。隙間を作って平らに広げてください。'
-                message += '麺全体が入るように撮り直すか、下に実測重量を入力してください。'
-            else:
-                _log_estimate_outcome(request, '麺の重なり・密集を確認して重量推定を見送り')
-                message = THICK_CAPTURE_REASON + '撮り直すか、下に実測重量を入力してください。'
-            st.warning(message)
-            if 'saved_product' not in request:
-                product = _optional_result_product(request)
-            recovery(product, rgb, synthetic=using_demo)
             return
     if using_regression:
         succeeded = False
@@ -508,14 +491,13 @@ def render_results(request):
         _log_estimate_outcome(request, '検出結果・校正条件を確認して重量推定を見送り')
         if admin:
             st.warning('重量を計算できません。' + ' '.join(decision.reasons))
+        elif area_reason:
+            st.warning('面積から重量を推定できませんでした。' + area_reason)
         else:
-            if area_reason:
-                st.warning('面積から重量を推定できませんでした。' + area_reason)
-            else:
-                photo_reasons = [reason for code, reason in zip(decision.reason_codes, decision.reasons)
-                                 if code != 'uncalibrated']
-                st.warning('写真から重さを推定できませんでした。' +
-                           (' '.join(photo_reasons) or 'この撮影方法では製品の1本重量が必要です。'))
+            photo_reasons = [reason for code, reason in zip(decision.reason_codes, decision.reasons)
+                             if code != 'uncalibrated']
+            st.warning('写真から重さを推定できませんでした。' +
+                       (' '.join(photo_reasons) or 'この撮影方法では製品の1本重量が必要です。'))
         recovery(product, rgb, synthetic=using_demo)
         return
 

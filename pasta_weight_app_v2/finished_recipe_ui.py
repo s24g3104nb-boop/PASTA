@@ -7,7 +7,7 @@ from finished_recipe import REFERENCE_DRY_G, calculate_finished_recipe, recipe_d
 from ingredient_ui import render_ingredients
 from ui_shell import dry_weight_label
 
-DRY_LABELS = {'reference': '参考重量', 'actual': '実測重量', 'estimated': '写真による推定重量'}
+DRY_LABELS = {'reference': '参考重量', 'actual': '実測重量', 'estimated': '記録した概算重量'}
 
 
 def begin_recipe(draft, dish, measurements):
@@ -45,10 +45,7 @@ def _dry_option(ident, measurements):
     measurement = measurements.get(ident)
     if measurement is None:
         return f'保存済みの乾麺 #{ident}'
-    label = dry_weight_label(measurement)
-    if measurement['actual_g'] is None and measurement['estimated_g'] is not None:
-        label = '写真からの' + label
-    return f'{label} · #{ident}'
+    return f'{dry_weight_label(measurement)} · #{ident}'
 
 
 def render_finished_recipe(draft, measurements):

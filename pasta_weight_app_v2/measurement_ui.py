@@ -2,6 +2,7 @@
 import sqlite3
 import hashlib
 import json
+import math
 from uuid import uuid4
 import streamlit as st
 from pasta_vision import nutrition_for_weight
@@ -10,6 +11,7 @@ from measurement_diagnostics import trace
 from nutrition_state import (STANDARD_NUTRITION_NOTE, has_nutrition, snapshot_for_nutrition,
                              standard_nutrition_used)
 from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
+from ui_shell import approximate_weight_label
 
 
 def _submission_token(rgb, product, mode, weight, detected_count, estimator):
@@ -22,18 +24,20 @@ def _submission_token(rgb, product, mode, weight, detected_count, estimator):
         st.session_state['measurement_submission_token'] = uuid4().hex
         st.session_state.pop('actual_known', None)
         st.session_state.pop('actual_weight', None)
+        st.session_state.pop('estimated_weight', None)
     return st.session_state.setdefault('measurement_submission_token', uuid4().hex)
 
 
-def _remember_actual(token):
+def _remember_weights(token):
     st.session_state.setdefault('measurement_actual_drafts', {})[token] = {
         'known': st.session_state.get('actual_known', False),
         'weight': st.session_state.get('actual_weight'),
+        'estimated_weight': st.session_state.get('estimated_weight'),
     }
 
 
 def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_count,
-                         estimator, explanation, db_path=DEFAULT_DB, diagnostics=None):
+                         estimator, explanation, db_path=DEFAULT_DB, diagnostics=None, extrapolated=False):
     token = _submission_token(rgb, product, mode, weight, detected_count, estimator)
     receipt = st.session_state.setdefault('measurement_saved_results', {}).get(token)
     draft = st.session_state.get('measurement_actual_drafts', {}).get(token, {})
@@ -41,25 +45,35 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
     with st.container(key='weight_hero'):
         label = '入力した本数からの重量' if estimator == 'manual_count' else '推定重量'
         if estimator == AREA_ESTIMATOR:
-            st.metric('面積からの推定重量', f'約{weight:.0f} g')
-            st.caption('乾麺の見えている面積からの概算です。20〜50 gの写真を換算に使用しました。'
-                       '新しい試料での精度は未検証です。')
+            st.metric('面積からの推定重量', approximate_weight_label(weight))
+            st.caption('写真に写った乾麺の面積からの概算です。精度は未検証です。'
+                       + ('換算範囲外の参考値です。' if extrapolated else ''))
         else:
             st.metric(label, f'{weight:.1f} g')
+    estimated = weight
+    if estimator == AREA_ESTIMATOR:
+        saved_estimate = draft.get('estimated_weight')
+        estimated = st.number_input('栄養計算に使う概算重量（g）', min_value=0.,
+                                    value=weight if saved_estimate is None else saved_estimate,
+                                    step=0.1, format='%.2f', key='estimated_weight', disabled=bool(receipt),
+                                    on_change=_remember_weights, args=(token,))
+    valid_estimate = estimator != AREA_ESTIMATOR or (
+        estimated is not None and math.isfinite(estimated) and estimated > 0)
     has_actual = st.checkbox('実測重量も記録する（任意）',
                              value=draft.get('known', False), disabled=bool(receipt),
-                             key='actual_known', on_change=_remember_actual, args=(token,))
+                             key='actual_known', on_change=_remember_weights, args=(token,))
     actual = None
     if has_actual:
         actual = st.number_input('実測重量（g）', min_value=0.1,
                                  value=draft.get('weight'), step=0.1,
                                  key='actual_weight', disabled=bool(receipt),
-                                 on_change=_remember_actual, args=(token,))
+                                 on_change=_remember_weights, args=(token,))
         if actual is not None:
             st.write(f'実測 {actual:.1f} g · 写真の推定との差 {abs(weight - actual):.1f} g')
-    nutrition_weight = actual if actual is not None else weight
+    nutrition_weight = actual if actual is not None else estimated if valid_estimate else None
     nutrit = nutrition_for_weight(nutrition_weight, product['kcal_100'], product['protein_100'],
-                                  product['fat_100'], product['carb_100']) if has_nutrition(product, allow_demo=using_demo) else None
+                                  product['fat_100'], product['carb_100']) if (
+                                      nutrition_weight is not None and has_nutrition(product, allow_demo=using_demo)) else None
     if nutrit is not None:
         st.metric('乾麺分のカロリー', f'{nutrit["kcal"]:.1f} kcal')
         with st.container(key='nutrition_cards'):
@@ -67,8 +81,10 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
             c1.metric('たんぱく質', f'{nutrit["protein_g"]:.1f} g')
             c2.metric('脂質', f'{nutrit["fat_g"]:.1f} g')
             c3.metric('炭水化物', f'{nutrit["carb_g"]:.1f} g')
-    else:
+    elif valid_estimate:
         st.info('重量は保存できます。この乾麺の栄養は未計算です。')
+    if not valid_estimate:
+        st.caption('0より大きい概算重量を入力してください。')
     st.caption(f'使用製品：{product["name"]}')
     if nutrit is not None:
         st.caption(f'{"実測重量" if actual is not None else "推定重量"}から計算した乾麺分です。')
@@ -82,10 +98,12 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
         st.caption('推定の信頼性: CGテスト用' if using_demo else
                    '推定の信頼性: 実物での精度保証・予測区間は未検証です。重なり・斜め撮影・反射・製品差で誤差が出ます。')
     if st.button('履歴に保存', type='primary', width='stretch',
-                 key='measurement_save', disabled=bool(receipt) or (has_actual and actual is None)):
+                 key='measurement_save', disabled=bool(receipt) or not valid_estimate or (has_actual and actual is None)):
         try:
+            if estimator == AREA_ESTIMATOR:
+                diagnostics = dict(diagnostics or {}, image_estimated_g=weight)
             saved_id = save_measurement(product_name=product['name'], mode=mode,
-                             detected_count=detected_count, estimated_g=weight,
+                             detected_count=detected_count, estimated_g=estimated,
                              actual_g=actual, nutrition=nutrit, image_rgb=rgb,
                              source_kind='synthetic' if using_demo else 'real',
                              estimator=estimator,
@@ -96,7 +114,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
             if request and request['product']['id'] == product['id']:
                 # Returning to a saved result must show the calibration printed on that receipt.
                 request['saved_product'] = dict(product)
-            _remember_actual(token)
+            _remember_weights(token)
             st.rerun()
         except (OSError, ValueError, sqlite3.Error):
             st.error('保存できませんでした。写真と入力内容は保持しています。保存先の空き容量や接続を確認して、もう一度保存してください。')
@@ -111,9 +129,7 @@ def render_weight_result(*, weight, product, rgb, mode, using_demo, detected_cou
         from ui_shell import start_capture
         st.button('もう一度撮影', on_click=start_capture, args=('スマホで撮影' if using_demo else st.session_state.get('capture_resume_source', '写真をアップロード'),),
                   key='result_retake', width='stretch')
-    if estimator == AREA_ESTIMATOR:
-        st.caption('撮影距離や麺の重なりで誤差が出ます。はかりで測った重量を入力すると、栄養計算に反映します。')
-    else:
+    if estimator != AREA_ESTIMATOR:
         st.warning('表示値は試験的な推定値です。実際の食事管理に使う場合は'
                    '電子はかりで確認してください。')
 

@@ -167,7 +167,7 @@ assert at.button(key='manual_weight_save') and at.button(key='recovery_retake')
 
 
 @pytest.mark.parametrize('touches_border', [False, True])
-def test_dense_spread_shows_diagnostic_and_saves_measured_weight(tmp_path, touches_border):
+def test_dense_spread_shows_diagnostic_and_saves_edited_estimate(tmp_path, touches_border):
     run_app_script(f'touches_border = {touches_border}\n' + r'''
 from io import BytesIO
 import sys
@@ -194,25 +194,21 @@ Image.fromarray(image).save(photo, 'PNG')
 at.session_state['capture_photo'] = photo
 
 def must_not_count(*args, **kwargs):
-    raise AssertionError('推定を見送る写真を登録製品の本数換算に回しました')
+    raise AssertionError('面積推定ができた写真を登録製品の本数換算に回しました')
 
 capture_ui.detect_spread = must_not_count
+capture_ui.image_quality_warnings = lambda _: ['この画質警告で面積推定を止めない']
 at.run()
-assert not at.exception and not at.error
+assert not at.exception and not at.error and not at.warning
 assert at.selectbox(key='which_product').value == product['id']
-edge_warnings = [warning.value for warning in at.warning if '写真の端で麺が切れている可能性' in warning.value]
-if touches_border:
-    assert any('左端' in warning and '候補が密集' in warning for warning in edge_warnings)
-else:
-    assert not edge_warnings
-    assert any('重なりを減らして' in warning.value and '実測重量' in warning.value for warning in at.warning)
-assert not any('推定重量' in metric.label for metric in at.metric)
-assert at.button(key='recovery_retake')
+area = at.session_state['result_request']['_area_estimate']
+assert area.weight_g > 0 and area.extrapolated
+assert any(metric.label == '面積からの推定重量' for metric in at.metric)
 diagnostic = next(expander for expander in at.expander if expander.label == '乾麺の抽出結果を見る')
 assert diagnostic.get('image') or diagnostic.get('imgs')
 assert any(all(color in caption.value for color in ('緑', 'オレンジ', '赤'))
            for caption in diagnostic.caption)
-assert any('厚みの指標が上限を超えました' in warning.value for warning in diagnostic.warning)
+assert any('麺の候補が密集しています' in caption.value for caption in diagnostic.caption)
 summary, runs = (table.value for table in diagnostic.dataframe)
 summary = summary.set_index('画像の辺')
 assert set(summary.index) == {'上端', '下端', '左端', '右端'}
@@ -227,13 +223,13 @@ if touches_border:
     left_run, = runs.loc[runs['画像の辺'] == '左端'].to_dict('records')
     assert left_run['接触区間 (x, y)'] == '(0, 100)～(0, 209)'
 
-weight_input = next(widget for widget in at.number_input if widget.label == 'はかりで測った実測重量（g）')
-weight_input.set_value(40.).run()
-at.button(key='manual_weight_save').click().run()
-assert not at.exception and not at.error
-assert at.button(key='manual_weight_to_diary')
+at.number_input(key='estimated_weight').set_value(40.).run()
+assert any(metric.value == '140.0 kcal' for metric in at.metric)
+at.button(key='measurement_save').click().run()
+assert not at.exception and not at.error and not at.warning
+assert at.button(key='measurement_to_diary')
 row, = list_measurements()
-assert row['actual_g'] == 40. and row['estimated_g'] is None
+assert row['actual_g'] is None and row['estimated_g'] == 40. and row['kcal'] == 140.
 ''', tmp_path)
 
 
@@ -305,7 +301,7 @@ assert snapshot['weight_source'] == 'actual' and snapshot['dry_weight_g'] == 40.
 assert snapshot['nutrition']['kcal'] == 148.4
 
 at.button(key='measurement_to_diary').click().run()
-assert any('面積からの推定重量 約' in m.value for m in at.markdown)
+assert any('乾麺の概算重量 約' in m.value for m in at.markdown)
 at.button(key='meal_open_cooking').click().run()
 assert at.selectbox(key='record_kind').value == '料理・栄養'
 assert any('実測 40 g' in m.value for m in at.markdown)
@@ -321,7 +317,7 @@ assert at.number_input(key=servings).value == 3
 assert at.number_input(key=fraction).value == 0.4
 assert not at.exception
 at.button(key='back_to_meal_draft').click().run()
-assert any('面積からの推定重量 約' in m.value for m in at.markdown)
+assert any('乾麺の概算重量 約' in m.value for m in at.markdown)
 next(w for w in at.text_input if w.label == '料理名').set_value('面積推定の動作確認').run()
 at.button(key='meal_save').click().run()
 meal, = entries()

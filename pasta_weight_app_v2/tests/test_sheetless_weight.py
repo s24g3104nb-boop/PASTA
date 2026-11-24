@@ -99,7 +99,8 @@ photo = BytesIO()
 Image.new('RGB',(500,450),(196,164,55)).save(photo, format='PNG')
 at.session_state['capture_photo'] = photo
 at.run()
-assert not at.exception and at.button(key='manual_weight_save')
+assert not at.exception
+assert any(metric.label == '面積からの推定重量' for metric in at.metric)
 assert all(b.key!='analyze_photo' for b in at.button)
 assert not any('A4' in e.label for e in at.expander)
 assert not at.get('download_button')

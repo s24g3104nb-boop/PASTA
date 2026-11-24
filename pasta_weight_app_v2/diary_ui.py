@@ -16,7 +16,7 @@ from meal_photos import prepare_photo
 from finished_recipe_ui import begin_recipe, render_finished_recipe, show_nutrients
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
-from ui_shell import COOKING_RECORD, dry_weight_label
+from ui_shell import COOKING_RECORD, approximate_weight_label, dry_weight_label
 from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 from operation_logs import RECORDS, log_error
@@ -232,7 +232,7 @@ def _show_measurement(snapshot):
     actual = snapshot.get('actual_g')
     if estimated is not None:
         if snapshot.get('estimator') == AREA_ESTIMATOR:
-            st.write(f'面積からの推定重量 約{estimated:.0f} g（概算）')
+            st.write(f'乾麺の概算重量 {approximate_weight_label(estimated)}')
         else:
             st.write(f'推定重量 {estimated:g} g')
     if actual is not None:

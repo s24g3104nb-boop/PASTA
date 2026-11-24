@@ -44,6 +44,7 @@ class Estimate:
     reason: str
     observation: Observation
     area_feature: str | None = None
+    extrapolated: bool = False
 
 
 @dataclass(frozen=True)
@@ -242,7 +243,7 @@ def edge_diagnostic_overlay(rgb):
     return diagnose(rgb).overlay
 
 
-def describe_mask(scene, mask):
+def describe_mask(scene, mask, *, capture_checks=True):
     """Use the same features and capture checks for fitting and estimation."""
     if mask.dtype != np.bool_ or mask.shape != scene.shape[:2]:
         raise ValueError('Expected a binary mask aligned with the photo')
@@ -252,9 +253,9 @@ def describe_mask(scene, mask):
     geometry = mask_geometry(mask)
     length = geometry['quantile_length_px']
     fraction = area / mask.size
-    reason = mask_capture_reason(mask, length, dark_fraction=dark / mask.size)
-    return Observation(fraction, float(area / max(area + dark, 1)),
-                       float(geometry['area_over_length_squared']), reason)
+    reason = mask_capture_reason(mask, length, dark_fraction=dark / mask.size) if capture_checks else ''
+    area_ratio = float(geometry['area_over_length_squared']) if length > 0 else 0.
+    return Observation(fraction, float(area / max(area + dark, 1)), area_ratio, reason)
 
 
 def _too_little_foreground(fraction, length):
@@ -285,10 +286,10 @@ def mask_capture_reason(mask, length, *, dark_fraction=None):
     return ''
 
 
-def observe(rgb):
+def observe(rgb, *, capture_checks=True):
     scene = canonical_image(rgb)
-    observation = describe_mask(scene, pasta_mask(scene))
-    if max(rgb.shape[:2]) < MIN_LONG_SIDE and observation.reason != EDGE_CAPTURE_REASON:
+    observation = describe_mask(scene, pasta_mask(scene), capture_checks=capture_checks)
+    if capture_checks and max(rgb.shape[:2]) < MIN_LONG_SIDE and observation.reason != EDGE_CAPTURE_REASON:
         return replace(observation, reason='画像が小さすぎて麺の面積が安定しません。元の写真を選んでください。')
     return observation
 
@@ -302,6 +303,7 @@ def _load_model():
 
 
 def estimate_observation(observation):
+    """Apply the historical capture gates used by controlled experiments."""
     if observation.reason:
         return Estimate(None, observation.reason, observation)
     model = _load_model()
@@ -315,5 +317,21 @@ def estimate_observation(observation):
     return Estimate(weight_g, '', observation, model.area_feature)
 
 
-def estimate(rgb):
+def estimate_checked(rgb):
+    """Keep capture and calibration gates for comparisons with the research baseline."""
     return estimate_observation(observe(rgb))
+
+
+def estimate(rgb):
+    """Convert visible foreground to a public estimate without applying research gates."""
+    observation = observe(rgb, capture_checks=False)
+    if observation.image_fraction <= 0:
+        return Estimate(None, '乾麺の候補を抽出できませんでした。', observation)
+    model = _load_model()
+    area = getattr(observation, model.area_feature)
+    weight_g = model.predict(area)
+    if not math.isfinite(area) or area <= 0 or not math.isfinite(weight_g) or weight_g <= 0:
+        return Estimate(None, '抽出した面積から正の重量に換算できませんでした。',
+                        observation, model.area_feature)
+    extrapolated = not model.area_min <= area <= model.area_max
+    return Estimate(weight_g, '', observation, model.area_feature, extrapolated)

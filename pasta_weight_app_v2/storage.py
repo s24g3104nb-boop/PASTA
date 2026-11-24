@@ -1,6 +1,7 @@
 """SQLiteによる食品データと測定履歴の保存。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 import os
 from datetime import datetime
@@ -163,7 +164,6 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
     filename = f'{uuid4().hex}.jpg'
     exact_filename=filename.removesuffix('.jpg')+'.png'
     if diagnostics is not None:
-        import json
         diagnostics=dict(diagnostics,inference_image_filename=exact_filename)
         serialized=json.dumps(diagnostics,ensure_ascii=False,allow_nan=False)
     try:
@@ -216,7 +216,30 @@ def save_measurement(*, product_name, mode, detected_count, estimated_g, actual_
 
 
 @logged_operation(RECORDS, '測定履歴の読み込み', report_success=False)
-def list_measurements(db_path=DEFAULT_DB):
+def list_measurements(db_path=DEFAULT_DB, *, include_image_estimate=False):
     with _connect(db_path) as con:
+        if include_image_estimate:
+            # Read the schema and rows from the same snapshot while the first
+            # save with diagnostics may be creating the optional table.
+            con.execute('BEGIN')
+        if include_image_estimate and con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='measurement_diagnostics'").fetchone():
+            rows = [dict(row) for row in con.execute('''
+                SELECT m.*, d.details_json FROM measurements AS m
+                LEFT JOIN measurement_diagnostics AS d ON d.measurement_id=m.id
+                WHERE m.archived=0 ORDER BY m.id DESC''')]
+            for row in rows:
+                row['image_estimated_g'] = _read_image_estimate(row.pop('details_json'))
+            return rows
         return [dict(row) for row in con.execute(
             'SELECT * FROM measurements WHERE archived=0 ORDER BY id DESC')]
+
+
+def _read_image_estimate(details):
+    if details is None:
+        return None
+    try:
+        value = json.loads(details).get('image_estimated_g')
+        return finite_nonnegative(value, '写真の推定重量') if type(value) in (int, float) else None
+    except (AttributeError, ValueError, OverflowError):
+        return None

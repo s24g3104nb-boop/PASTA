@@ -9,13 +9,18 @@ PAGES = ['ホーム', '記録', '設定']
 COOKING_RECORD = '料理・栄養'
 
 
+def approximate_weight_label(weight):
+    grams = f'{weight:.0f}' if weight >= 1 else f'{weight:.2g}'
+    return f'約{grams} g'
+
+
 def dry_weight_label(row):
     if row['actual_g'] is not None:
         return f"実測 {row['actual_g']:g} g"
     if row['estimated_g'] is None:
         return '重量未登録'
     if row.get('estimator') == AREA_ESTIMATOR:
-        return f"推定 約{row['estimated_g']:.0f} g"
+        return f"概算 {approximate_weight_label(row['estimated_g'])}"
     return f"推定 {row['estimated_g']:g} g"
 
 

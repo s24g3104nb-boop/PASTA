@@ -5,11 +5,17 @@ import pandas as pd
 import streamlit as st
 from storage import DEFAULT_DB, list_measurements
 from history_actions import change_measurement
-from ui_shell import empty_state
+from ui_shell import approximate_weight_label, empty_state
 from sheetless_area import ESTIMATOR as AREA_ESTIMATOR
 
 
+def _photo_estimate(row):
+    original = row.get('image_estimated_g')
+    return original if original is not None else row['estimated_g']
+
+
 def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
+    photo_estimate = _photo_estimate(row)
     with st.container(border=True,key=f"card_history_{row['id']}"):
         left,right=st.columns([1,3])
         path=Path(db_path).parent/'photos'/Path(row.get('image_filename') or '').name
@@ -23,10 +29,15 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
             if row['estimator'] == AREA_ESTIMATOR:
                 if row['actual_g'] is not None:
                     st.markdown(f"### 実測 {row['actual_g']:g} g · {calories}")
-                    st.caption(f'面積からの推定重量 約{weight:.0f} g（概算）')
+                    st.caption(f'面積からの推定重量 約{photo_estimate:.1f} g（概算）')
+                    if weight != photo_estimate:
+                        st.caption(f'修正した概算 約{weight:.1f} g')
                 else:
-                    st.markdown(f"### 約{weight:.0f} g · {calories}")
-                    st.caption('写真の面積から推定した概算です。')
+                    st.markdown(f"### {approximate_weight_label(weight)} · {calories}")
+                    if weight == photo_estimate:
+                        st.caption('写真の面積から推定した概算です。')
+                    else:
+                        st.caption(f'修正した概算です。写真の推定は約{photo_estimate:.1f} gです。')
             else:
                 st.markdown(f"### {weight:.1f} g · {calories}")
             if row['estimator']=='manual_weight':st.caption('実測重量（推定なし）')
@@ -45,8 +56,8 @@ def measurement_card(row, db_path=DEFAULT_DB, *, compact=False):
             if row['estimator'] == 'a4_area_calibrated':
                 st.caption('A4を用いた面積換算（検証中）')
             st.caption('元の推定重量・推定栄養値を保持し、はかりの実測値を追記します。料理計算では実測値を優先します。')
-            if row['actual_g'] is not None and row['estimated_g'] is not None:
-                st.write(f"絶対誤差：{abs(row['estimated_g']-row['actual_g']):.1f} g")
+            if row['actual_g'] is not None and photo_estimate is not None:
+                st.write(f"元の推定と実測の差 {abs(photo_estimate - row['actual_g']):.1f} g")
             with st.form(f"edit_history_{row['id']}"):
                 actual=st.number_input('はかりで測った重量（g）',min_value=.1,value=float(row['actual_g']) if row['actual_g'] is not None else None,key=f"actual_{row['id']}")
                 if st.form_submit_button('実測重量を保存'):
@@ -75,7 +86,8 @@ def render_history(db_path=DEFAULT_DB):
     st.caption('ひと皿ずつ、振り返ろう。')
     if st.session_state.get('history_feedback'):st.success(st.session_state.pop('history_feedback'))
     try:
-        rows=[row for row in list_measurements(db_path) if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic']
+        rows = [row for row in list_measurements(db_path, include_image_estimate=True)
+                if st.session_state.get('_app_admin') or row['source_kind'] != 'synthetic']
     except (OSError, sqlite3.Error):
         st.error('履歴を読み込めませんでした。保存先を確認し、開き直してください。')
         return
@@ -96,12 +108,15 @@ def render_history(db_path=DEFAULT_DB):
         return
     with st.expander('誤差の集計・一覧データ'):
         frame=pd.DataFrame(matches)
+        frame['photo_estimate_g'] = [_photo_estimate(row) for row in matches]
         shown=frame.copy()
         shown.loc[shown.estimator.str.startswith('ridge:') | (shown.estimator == AREA_ESTIMATOR), 'detected_count'] = None
-        st.dataframe(shown[['created_at','product_name','mode','detected_count','estimated_g','actual_g','kcal','estimator','source_kind']],hide_index=True,width='stretch')
-        measured=frame[(frame.source_kind=='real') & (frame.actual_g>0) & frame.estimated_g.notna()].copy()
+        st.dataframe(shown[['created_at','product_name','mode','detected_count','estimated_g','photo_estimate_g','actual_g','kcal','estimator','source_kind']],
+                     column_config={'estimated_g': '記録した推定・概算 (g)', 'photo_estimate_g': '元の推定 (g)'},
+                     hide_index=True, width='stretch')
+        measured=frame[(frame.source_kind=='real') & (frame.actual_g>0) & frame.photo_estimate_g.notna()].copy()
         if len(measured):
-            measured['absolute_error_g']=(measured.estimated_g-measured.actual_g).abs()
+            measured['absolute_error_g']=(measured.photo_estimate_g-measured.actual_g).abs()
             measured['absolute_percentage_error']=measured.absolute_error_g/measured.actual_g*100
             st.metric('実写・実測値がある履歴のMAE',f'{measured.absolute_error_g.mean():.2f} g')
             st.dataframe(measured.groupby(['mode','estimator']).agg(件数=('id','count'),MAE_g=('absolute_error_g','mean'),最大誤差_g=('absolute_error_g','max'),MAPE_percent=('absolute_percentage_error','mean')).reset_index(),hide_index=True)
