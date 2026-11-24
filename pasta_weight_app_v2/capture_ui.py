@@ -18,8 +18,8 @@ from measurement_defaults import DEFAULT_SPREAD, DEFAULT_BUNDLE
 from measurement_diagnostics import decide_count_weight, strand_calibration, trace
 from nutrition_state import STANDARD_DRY_PASTA
 from operation_logs import WEIGHT, log_error, log_info
-from sheetless_area import AREA_BOUNDARY_TOLERANCE_G, ESTIMATOR as AREA_ESTIMATOR
-from sheetless_area import estimate as estimate_area
+from sheetless_area import AREA_BOUNDARY_TOLERANCE_G, EDGE_CAPTURE_REASON, ESTIMATOR as AREA_ESTIMATOR
+from sheetless_area import edge_diagnostic_overlay, estimate as estimate_area
 
 BASE_DIR = Path(__file__).resolve().parent
 from ui_shell import start_capture, start_manual_weight
@@ -270,6 +270,23 @@ def _optional_result_product(request):
     return product
 
 
+def _show_area_diagnostic(request):
+    with st.expander('乾麺の抽出結果を見る'):
+        if '_area_overlay' not in request:
+            try:
+                request['_area_overlay'] = edge_diagnostic_overlay(request['rgb'])
+            except Exception:
+                log_error(WEIGHT, '乾麺の抽出結果の可視化 失敗')
+                request['_area_overlay'] = None
+        overlay = request['_area_overlay']
+        if overlay is None:
+            st.caption('この写真の抽出結果を表示できませんでした。')
+            return
+        st.image(overlay, caption='解析に使った写真に抽出結果を重ねています。',
+                 width='stretch', output_format='PNG')
+        st.caption('緑は乾麺の候補、オレンジは判定から除いた画像端の候補、赤は見切れの可能性がある画像端の候補です。')
+
+
 def render_results(request):
     from manual_weight_ui import recovery
     rgb=request['rgb']; product=request['product']; mode=request['mode']
@@ -305,6 +322,9 @@ def render_results(request):
             st.rerun()
     if st.session_state.pop('capture_product_refreshed', False):
         st.info('製品情報が更新されました。新しい校正値による結果を確認してください。')
+    use_area = not admin and not using_demo and not using_regression and mode == '広げた状態'
+    if use_area:
+        _show_area_diagnostic(request)
     if not using_demo:
         if '_quality_warnings' not in request:
             request['_quality_warnings'] = image_quality_warnings(rgb)
@@ -319,7 +339,7 @@ def render_results(request):
             recovery(product,rgb,synthetic=using_demo)
             return
     area_reason = None
-    if not admin and not using_demo and not using_regression and mode == '広げた状態':
+    if use_area:
         if '_area_estimate' not in request:
             try:
                 with st.spinner('写真から乾麺の面積を調べています…'):
@@ -343,6 +363,14 @@ def render_results(request):
                                  diagnostics=diagnostics, explanation='乾麺の可視面積による概算')
             return
         area_reason = area.reason if area is not None else '面積の解析を完了できませんでした。'
+        if area_reason == EDGE_CAPTURE_REASON:
+            _log_estimate_outcome(request, '写真の見切れを確認して重量推定を見送り')
+            st.warning('写真の端で麺が切れている可能性があるため、重さを推定できませんでした。'
+                       '麺全体が入るように撮り直すか、下に実測重量を入力してください。')
+            if 'saved_product' not in request:
+                product = _optional_result_product(request)
+            recovery(product, rgb, synthetic=using_demo)
+            return
     if using_regression:
         succeeded = False
         if request['model_error']:

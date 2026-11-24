@@ -21,6 +21,7 @@ AREA_FEATURES = ('image_fraction', 'pasta_or_dark_fraction', 'area_over_length_s
 MODEL_PATH = Path(__file__).with_name(f'{ESTIMATOR}.json')
 MIN_LONG_SIDE = 640
 THICK_CAPTURE_REASON = '麺が厚い束に見えます。重なりを減らして平らに広げてください。'
+EDGE_CAPTURE_REASON = '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
 # Small rasterization changes near a calibration endpoint should not cause
 # abrupt rejection. This allowance is for capture variation, not new weights.
 AREA_BOUNDARY_TOLERANCE_G = 2.0
@@ -75,7 +76,11 @@ def canonical_image(rgb):
                       interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
 
 
-def pasta_mask(scene):
+def _edge_sides(labels):
+    return labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]
+
+
+def _pasta_components(scene):
     hsv = cv2.cvtColor(scene, cv2.COLOR_RGB2HSV)
     lab = cv2.cvtColor(scene, cv2.COLOR_RGB2LAB)
     mask = cv2.inRange(hsv, (7, 30, 55), (45, 255, 255))
@@ -85,25 +90,110 @@ def pasta_mask(scene):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     keep = np.zeros(count, dtype=bool)
     keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= 30
-    _discard_isolated_border_specks(labels, stats, keep)
+    border = _edge_sides(labels)
+    sides = [np.unique(side) for side in border]
+    edge_count = np.bincount(np.concatenate(sides), minlength=count)
+    edge_count[0] = 0
+    edge = np.flatnonzero(edge_count)
+    if not edge.size:
+        return labels, keep, []
+
+    # Consider even sub-30px edge components: a thin, disconnected tip can
+    # otherwise disappear before the clipping check.
+    horizontal = np.zeros(count, dtype=bool)
+    horizontal[np.union1d(sides[0], sides[1])] = True
+    interior = keep & (edge_count == 0)
+    edge_hits = np.bincount(np.concatenate(border), minlength=count)
+    ignore = _isolated_border_noise(labels, stats, edge_count, edge_hits, horizontal,
+                                    lab, interior)
+    keep[edge] = True
+    # An extensive group of edge detections is ambiguous even if each is small.
+    areas = stats[:, cv2.CC_STAT_AREA]
+    if areas[ignore].sum() > .005 * areas[keep].sum():
+        ignore = []
+    keep[ignore] = False
+    return labels, keep, ignore
+
+
+def _isolated_border_noise(labels, stats, edge_count, edge_hits, horizontal, lab, interior):
+    """Find small edge spots and shallow, weak-yellow streaks isolated from all colour candidates."""
+    height, width = labels.shape
+    clearance = 20  # canonical pixels, including near-edge tips and other specks
+    ignore = []
+    weak_yellow_limit = None
+    blue_yellow = lab[:, :, 2]
+    for component in np.flatnonzero(edge_count):
+        x, y, w, h, area = stats[component]
+        along, inward = (w, h) if horizontal[component] else (h, w)
+        single_side = edge_count[component] == 1
+        tiny = max(w, h) <= 3
+        compact = (single_side and along <= 32 and inward <= min(12, max(along, 3))
+                   and area >= .75 * w * h)
+        # An oblique clipped strand can look pale and shallow too. Only discard
+        # extended streaks whose footprint fills and follows the frame edge.
+        shallow_streak = (single_side and 32 < along <= 64 and inward <= 6 and along >= 4 * inward
+                          and edge_hits[component] >= .9 * along and area >= .85 * w * h)
+        if not (tiny or compact or shallow_streak):
+            continue
+        vicinity = labels[max(0, y - clearance):min(height, y + h + clearance),
+                          max(0, x - clearance):min(width, x + w + clearance)]
+        if np.any((vicinity != 0) & (vicinity != component)):
+            continue
+        if shallow_streak:
+            if weak_yellow_limit is None:
+                interior_yellow = blue_yellow[interior[labels]]
+                weak_yellow_limit = 0
+                # Keep the edge warning if the body mask also depends heavily
+                # on marginal colour, for example after JPEG chroma bleed.
+                if interior_yellow.size and np.mean(interior_yellow >= 165) >= .9:
+                    weak_yellow_limit = min(160, np.median(interior_yellow) - 18)
+            bounds = np.s_[y:y + h, x:x + w]
+            component_pixels = labels[bounds] == component
+            if blue_yellow[bounds][component_pixels].max() > weak_yellow_limit:
+                continue
+            if not _has_reflection_halo(lab, x, y, w, h, horizontal[component]):
+                continue
+        ignore.append(component)
+    return ignore
+
+
+def _has_reflection_halo(lab, x, y, width, height, horizontal):
+    # Look inward from the frame for a diffuse band just below the mask's
+    # yellow threshold. A uniform pale stripe alone could be a clipped strand.
+    if horizontal:
+        strip = lab[:, x:x + width]
+        if y:
+            strip = strip[::-1]
+        depth = height
+    else:
+        strip = lab[y:y + height, :].swapaxes(0, 1)
+        if x:
+            strip = strip[::-1]
+        depth = width
+    halo = strip[depth:depth + 4]
+    # JPEG chroma bleed may tint dark pixels beside a strand. The band must
+    # also be visibly lighter than a dark background.
+    pale = (halo[:, :, 0] >= 80) & (halo[:, :, 2] >= 134) & (halo[:, :, 2] < 145)
+    pale_columns = np.count_nonzero(pale, axis=0) >= 3
+    return halo.shape[0] == 4 and np.count_nonzero(pale_columns) >= .75 * strip.shape[1]
+
+
+def pasta_mask(scene):
+    labels, keep, _ = _pasta_components(scene)
     return keep[labels]
 
 
-def _discard_isolated_border_specks(labels, stats, keep):
-    """Keep actual clipped strands and ignore only tiny, distant edge reflections."""
-    edge = np.unique(np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1])))
-    short = np.maximum(stats[edge, cv2.CC_STAT_WIDTH], stats[edge, cv2.CC_STAT_HEIGHT]) <= 32
-    specks = edge[keep[edge] & short]
-    areas = stats[:, cv2.CC_STAT_AREA]
-    if not specks.size or areas[specks].sum() > .005 * areas[keep].sum():
-        return
-    speck_pixels = np.isin(labels, specks)
-    interior = keep[labels] & ~speck_pixels
-    # Pixels within 10 canonical pixels of another component could be an
-    # interrupted strand. Retain those components for the clipping check.
-    distance = cv2.distanceTransform((~interior).astype(np.uint8), cv2.DIST_L2, 5)
-    nearby = np.unique(labels[speck_pixels & (distance <= 10)])
-    keep[np.setdiff1d(specks, nearby)] = False
+def edge_diagnostic_overlay(rgb):
+    """Overlay the retained mask, removed edge components, and retained edge pixels."""
+    scene = canonical_image(rgb)
+    labels, keep, ignored = _pasta_components(scene)
+    mask = keep[labels]
+    overlay = scene.copy()
+    overlay[mask] = np.rint(.55 * scene[mask] + .45 * np.array([0, 235, 80])).astype(np.uint8)
+    overlay[np.isin(labels, ignored)] = (255, 154, 32)
+    for pixels, contacts in zip(_edge_sides(overlay), _edge_sides(mask)):
+        pixels[contacts] = (255, 32, 56)
+    return overlay
 
 
 def describe_mask(scene, mask):
@@ -123,13 +213,13 @@ def describe_mask(scene, mask):
 
 def mask_capture_reason(mask, length, *, dark_fraction=None):
     """Shared framing and shape checks, with a dark-background check for the shipped model."""
+    if any(side.any() for side in _edge_sides(mask)):
+        return EDGE_CAPTURE_REASON
     fraction = np.count_nonzero(mask) / mask.size
     if fraction < .025 or length < 25:
         return '乾麺の領域が少なすぎます。麺をもう少し大きく写してください。'
     if dark_fraction is not None and dark_fraction < .09:
         return '暗く無地の背景に置き、反射を避けてください。'
-    if mask[[0, -1], :].any() or mask[:, [0, -1]].any():
-        return '麺の候補が画像の端に触れています。麺全体が入るように撮影してください。'
     thickness = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
     if np.quantile(thickness[mask], .75) > .018 * length or fraction > .73:
         return THICK_CAPTURE_REASON
@@ -139,7 +229,7 @@ def mask_capture_reason(mask, length, *, dark_fraction=None):
 def observe(rgb):
     scene = canonical_image(rgb)
     observation = describe_mask(scene, pasta_mask(scene))
-    if max(rgb.shape[:2]) < MIN_LONG_SIDE:
+    if max(rgb.shape[:2]) < MIN_LONG_SIDE and observation.reason != EDGE_CAPTURE_REASON:
         return replace(observation, reason='画像が小さすぎて麺の面積が安定しません。元の写真を選んでください。')
     return observation
 

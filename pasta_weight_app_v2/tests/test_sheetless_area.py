@@ -1,9 +1,13 @@
 """Synthetic regression fixtures for the shipped area-only estimator."""
+from io import BytesIO
+
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 
 from pasta_weight_app_v2 import sheetless_area
+from pasta_weight_app_v2.pasta_vision import image_to_rgb
 from pasta_weight_app_v2.sheetless_area import AreaModel, Observation, estimate
 
 
@@ -77,6 +81,89 @@ def test_checks_border_fragment_near_pasta():
     result = estimate(photo)
     assert result.weight_g is None
     assert '画像の端' in result.reason
+
+
+@pytest.mark.parametrize('quarter_turns', range(4))
+def test_shallow_pale_reflection_is_ignored_without_changing_weight(quarter_turns):
+    clean_photo = cv2.resize(spread(36), (960, 720), interpolation=cv2.INTER_NEAREST)
+    photo = clean_photo.copy()
+    photo[230:280, -4:] = (175, 158, 121)
+    photo[230:280, -8:-4] = (155, 147, 125)
+    clean_photo = np.rot90(clean_photo, quarter_turns)
+    photo = np.rot90(photo, quarter_turns)
+    result = estimate(photo)
+    clean = estimate(clean_photo)
+    assert clean.weight_g is not None
+    assert result.weight_g == clean.weight_g
+    np.testing.assert_array_equal(sheetless_area.pasta_mask(photo), sheetless_area.pasta_mask(clean_photo))
+
+
+@pytest.mark.parametrize('condition', [
+    'yellow_streak', 'inward_tip', 'near_body', 'many_streaks', 'pale_parallel_clip', 'pale_oblique_clip',
+])
+def test_ambiguous_border_components_still_block_weight(condition):
+    photo = cv2.resize(spread(36), (960, 720), interpolation=cv2.INTER_NEAREST)
+    if condition == 'yellow_streak':
+        photo[230:280, -4:] = (220, 180, 40)
+        photo[230:280, -8:-4] = (155, 147, 125)
+    elif condition == 'inward_tip':
+        photo[230, -22:] = (220, 180, 40)
+    elif condition == 'near_body':
+        photo[228:231, -22:-12] = (220, 180, 40)
+        photo[230:280, -4:] = (175, 158, 121)
+        photo[230:280, -8:-4] = (155, 147, 125)
+    elif condition == 'many_streaks':
+        for y in range(30, 670, 100):
+            photo[y:y+60, -5:] = (175, 158, 121)
+            photo[y:y+60, -9:-5] = (155, 147, 125)
+    elif condition == 'pale_parallel_clip':
+        cv2.line(photo, (960, 230), (960, 280), (175, 158, 121), 7)
+    else:
+        cv2.line(photo, (965, 230), (956, 280), (175, 158, 121), 5)
+    result = estimate(photo)
+    assert result.weight_g is None
+    assert result.reason == sheetless_area.EDGE_CAPTURE_REASON
+
+
+def test_overlay_shows_retained_foreground_ignored_streak_and_exact_contact():
+    photo = cv2.resize(spread(36), (960, 720), interpolation=cv2.INTER_NEAREST)
+    photo[230:280, -4:] = (175, 158, 121)
+    photo[230:280, -8:-4] = (155, 147, 125)
+    photo[400:404, :100] = (220, 180, 40)
+    original = photo.copy()
+    overlay = sheetless_area.edge_diagnostic_overlay(photo)
+    np.testing.assert_array_equal(photo, original)
+    np.testing.assert_array_equal(overlay[240, -1], (255, 154, 32))
+    np.testing.assert_array_equal(overlay[401, 0], (255, 32, 56))
+    assert not np.array_equal(overlay[401, 50], photo[401, 50])
+    np.testing.assert_array_equal(overlay[0, 0], photo[0, 0])
+
+
+@pytest.mark.parametrize('quality', [85, 95])
+@pytest.mark.parametrize('parallel', [False, True])
+def test_jpeg_color_bleed_does_not_remove_a_clipped_strand(quality, parallel):
+    photo = spread(32)
+    color = (175, 158, 121)
+    if parallel:
+        cv2.line(photo, (640, 103), (640, 137), color, thickness=5)
+    else:
+        cv2.line(photo, (646, 91), (638, 138), color, thickness=3)
+    with BytesIO() as encoded:
+        Image.fromarray(photo).save(encoded, 'JPEG', quality=quality)
+        result = estimate(image_to_rgb(encoded))
+    assert result.weight_g is None
+    assert result.reason == sheetless_area.EDGE_CAPTURE_REASON
+
+
+def test_reflection_retry_requires_a_stable_interior_color_mask():
+    photo = cv2.resize(spread(36), (960, 720), interpolation=cv2.INTER_NEAREST)
+    # Broader, near-threshold colour bands make the visible area less certain.
+    for y in range(90, 630, 15):
+        photo[y:y+1, 100:860] = (180, 161, 105)
+    assert estimate(photo).weight_g is not None
+    photo[230:280, -4:] = (175, 158, 121)
+    photo[230:280, -8:-4] = (155, 147, 125)
+    assert estimate(photo).reason == sheetless_area.EDGE_CAPTURE_REASON
 
 
 @pytest.mark.parametrize('area,expected', [(.181, 18.1), (.179, None), (.519, 51.9), (.521, None)])

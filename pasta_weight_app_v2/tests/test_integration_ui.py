@@ -164,6 +164,56 @@ assert at.button(key='manual_weight_save') and at.button(key='recovery_retake')
 ''', tmp_path)
 
 
+def test_clipped_spread_shows_diagnostic_and_saves_measured_weight(tmp_path):
+    run_app_script(r'''
+from io import BytesIO
+import sys
+
+import numpy as np
+from PIL import Image
+from streamlit.testing.v1 import AppTest
+
+sys.path.insert(0, 'pasta_weight_app_v2')
+import capture_ui
+from storage import list_measurements, save_product
+
+at = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
+product = save_product('合成テスト用の校正済み製品', .68, 350, 12, 2, 70)
+at.session_state['last_product_id'] = product['id']
+at.button(key='home_camera').click().run()
+image = np.full((480, 640, 3), 42, np.uint8)
+for y in range(60, 420, 10):
+    image[y:y + 5, 64:576] = (220, 180, 40)
+image[60:65, :64] = (220, 180, 40)
+photo = BytesIO()
+Image.fromarray(image).save(photo, 'PNG')
+at.session_state['capture_photo'] = photo
+
+def must_not_count(*args, **kwargs):
+    raise AssertionError('見切れた写真を登録製品の本数換算に回しました')
+
+capture_ui.detect_spread = must_not_count
+at.run()
+assert not at.exception and not at.error
+assert at.selectbox(key='which_product').value == product['id']
+assert any('写真の端で麺が切れている可能性' in warning.value for warning in at.warning)
+assert not any('推定重量' in metric.label for metric in at.metric)
+assert at.button(key='recovery_retake')
+diagnostic = next(expander for expander in at.expander if expander.label == '乾麺の抽出結果を見る')
+assert diagnostic.get('image') or diagnostic.get('imgs')
+assert any(all(color in caption.value for color in ('緑', 'オレンジ', '赤'))
+           for caption in diagnostic.caption)
+
+weight_input = next(widget for widget in at.number_input if widget.label == 'はかりで測った実測重量（g）')
+weight_input.set_value(40.).run()
+at.button(key='manual_weight_save').click().run()
+assert not at.exception and not at.error
+assert at.button(key='manual_weight_to_diary')
+row, = list_measurements()
+assert row['actual_g'] == 40. and row['estimated_g'] is None
+''', tmp_path)
+
+
 def test_invalid_recent_photo_does_not_block_home(tmp_path):
     run_app_script(r'''
 import sys
