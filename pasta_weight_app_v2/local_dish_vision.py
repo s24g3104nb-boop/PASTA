@@ -1,4 +1,4 @@
-"""Frozen OpenCLIP prompts for an editable cooking suggestion, offline only."""
+"""Local colour and optional OpenCLIP suggestions for the standard recipes."""
 from dataclasses import dataclass
 from hashlib import file_digest
 from pathlib import Path
@@ -8,9 +8,9 @@ import numpy as np
 from PIL import Image
 
 if __package__:
-    from .dish_classifier import LinearDishHead
+    from .dish_classifier import LinearDishHead, STANDARD_DISH_NAMES
 else:
-    from dish_classifier import LinearDishHead
+    from dish_classifier import LinearDishHead, STANDARD_DISH_NAMES
 
 MODEL = 'ViT-B-32-quickgelu'
 CHECKPOINT_SHA256 = '46683a32721d5c68911153698992361285d20ca690bb4f317c11e45c03d798fa'
@@ -29,6 +29,7 @@ INGREDIENT_PROMPTS = {
 CANDIDATE_MIN_SIMILARITY = .20
 CANDIDATE_MIN_MARGIN = .012
 VISIBLE_HINT_MIN_MARGIN = .026
+COLOR_METHOD = 'OpenCV'
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,79 @@ class Suggestion:
     visible_options: tuple[str, ...]
     color_note: str | None
     method: str
+
+
+def _balance_from_neutral_pixels(rgb, outside):
+    # A mostly neutral plate can indicate a mild lighting cast. Colored plates
+    # and dark backgrounds provide no reliable white reference.
+    values = rgb[outside].astype(np.float32)
+    maximum = values.max(axis=1)
+    neutral = (maximum >= 115) & (values.min(axis=1) >= .79 * maximum)
+    if np.count_nonzero(neutral) < .08 * len(values):
+        return rgb
+    reference = np.median(values[neutral], axis=0)
+    gains = np.clip(reference.mean() / reference, .84, 1.18)
+    return np.rint(np.clip(rgb * gains, 0, 255)).astype(np.uint8)
+
+
+def _sauce_colors(rgb):
+    hue, saturation, value = cv2.split(cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV))
+    lightness, red_green, blue_yellow = cv2.split(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB))
+    # Lab a* helps separate orange-red sauce from brown wood and yellow-green
+    # pesto from warm cream. OpenCV centers a* and b* at 128.
+    tomato = (((hue <= 16) | (hue >= 166)) & (saturation >= 84) & (value >= 55)
+              & (red_green >= 150))
+    # Pale yellow can acquire a slightly green Lab a* under cool light or
+    # when red and green channels approach clipping.
+    bright_yellow = (value >= 230) & (hue <= 36) & (saturation <= 112)
+    pale_yellow = ((value >= 170) & (hue <= 39) & (saturation <= 83)
+                   & (red_green >= 116)) | bright_yellow
+    genovese = ((hue >= 23) & (hue <= 86) & (saturation >= 40) & (value >= 47)
+                 & (red_green <= 125) & (blue_yellow >= 135) & ~pale_yellow)
+    # A golden egg sauce can be more saturated than pale cream. Require a
+    # yellower hue for those pixels to avoid red-orange toppings and wood.
+    yellow_or_cream = ((hue >= 12) & (saturation <= 136)) | ((hue >= 16) & (saturation <= 205))
+    carbonara = (yellow_or_cream & (hue <= 39) & (saturation >= 22)
+                 & (value >= 95) & (lightness >= 82) & (blue_yellow >= 140)
+                 & ((red_green >= 126) | pale_yellow) & (red_green <= 148))
+    return {'トマトパスタ': ('赤・オレンジ', tomato), 'ジェノベーゼ': ('緑・黄緑', genovese),
+            'カルボナーラ': ('黄・クリーム', carbonara)}
+
+
+def suggest_dish_from_color(rgb):
+    """Suggest a recipe from central sauce colour and spatial support only."""
+    if (not isinstance(rgb, np.ndarray) or rgb.ndim != 3 or rgb.shape[2] != 3
+            or rgb.dtype != np.uint8 or min(rgb.shape[:2]) == 0):
+        raise ValueError('Expected a nonempty RGB uint8 photo')
+    h, w = rgb.shape[:2]
+    scale = min(1., 384 / max(h, w))
+    shape = max(16, round(w * scale)), max(16, round(h * scale))
+    if shape != (w, h):
+        rgb = cv2.resize(rgb, shape, interpolation=cv2.INTER_AREA)
+        h, w = rgb.shape[:2]
+    y = (2. * (np.arange(h) + .5) / h - 1.)[:, None]
+    x = (2. * (np.arange(w) + .5) / w - 1.)[None, :]
+    radius_squared = x*x + y*y
+    middle = radius_squared <= .28
+    outside = radius_squared >= .48
+    weights = np.maximum(0., 1. - radius_squared)**2
+    # A single basil leaf or piece of bacon can be intensely coloured without
+    # being typical of the sauce. Check distribution across the central dish.
+    center = radius_squared <= .49
+    quadrants = [center & (x * dx > 0) & (y * dy > 0) for dx in (-1, 1) for dy in (-1, 1)]
+    colors = _sauce_colors(_balance_from_neutral_pixels(rgb, outside))
+    scores = {}
+    for name, (_, mask) in colors.items():
+        inner = float(mask[middle].mean())
+        outer = float(mask[outside].mean())
+        support = .65 * inner + .35 * float(np.average(mask, weights=weights))
+        spread = sum(min(float(mask[q].mean()) / .12, 1.) for q in quadrants) / len(quadrants)
+        scores[name] = max(0., support * (.70 + .30 * spread) - .70 * outer)
+    # This is a choice among the three recipes. In an evidence-free tie, use
+    # the same ordering as the manual menu.
+    name = max(STANDARD_DISH_NAMES, key=scores.get)
+    note = colors[name][0] if scores[name] > 0 else None
+    return Suggestion(name, (), note, COLOR_METHOD)
 
 
 def color_note(rgb):

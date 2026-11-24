@@ -13,6 +13,7 @@ import streamlit as st
 from cooking_storage import list_cooking_sessions
 from meal_diary import delete, entries, get, photo_path, save
 from meal_photos import prepare_photo
+from finished_recipe import standard_rows
 from finished_recipe_ui import begin_recipe, render_finished_recipe, show_nutrients
 from pasta_vision import image_to_rgb
 from storage import DEFAULT_DB, list_measurements
@@ -150,7 +151,7 @@ def _remember_diary_view():
 def _remember_field(draft_id, field, widget_key):
     draft = _drafts()[draft_id]
     draft[field] = st.session_state[widget_key]
-    if field == 'dish_name' and draft['dish_name'] != getattr(draft.get('photo_suggestion'), 'name', None):
+    if field == 'dish_name' and draft[field] != getattr(draft.get('photo_suggestion'), 'name', None):
         draft['photo_name_confirmed'] = False
 
 
@@ -162,18 +163,19 @@ def _field(widget, label, draft, field, **kwargs):
                   args=(draft['id'], field, key), **kwargs)
 
 
-def _apply_finished_recipe(draft, dish, measurements):
+def _apply_finished_recipe(draft, dish, measurements, *, keep_custom_name=False):
+    previous_dish = draft.get('finished_recipe', {}).get('dish')
     try:
         begin_recipe(draft, dish, measurements)
     except ValueError as exc:
         draft['recipe_apply_error'] = str(exc)
         return
-    draft['dish_name'] = dish
-    st.session_state['meal_dish_name_'+draft['id']] = dish
+    if not keep_custom_name or not draft['dish_name'] or draft['dish_name'] == previous_dish:
+        draft['dish_name'] = dish
+        st.session_state['meal_dish_name_'+draft['id']] = dish
     draft['photo_name_confirmed'] = (
-        draft.get('photo_recognition_enabled', True)
-        and dish == getattr(draft.get('photo_suggestion'), 'name', None)
-    )
+        (not keep_custom_name or 'manual_dish_choice' in draft)
+        and draft['dish_name'] == dish == getattr(draft.get('photo_suggestion'), 'name', None))
 
 
 def _reset_photo_analysis(draft):
@@ -188,13 +190,17 @@ def _upload_changed(draft_id, key):
     draft = _drafts()[draft_id]
     if uploaded is None and draft.get('photo_input_key') != key:
         return
-    _reset_photo_analysis(draft)
     if uploaded is not None:
+        content = uploaded.getvalue()
+        if content != draft['photo_bytes']:
+            _reset_photo_analysis(draft)
+            draft.pop('manual_dish_choice', None)
         draft['photo_input_key'] = key
-        draft['photo_bytes'] = uploaded.getvalue()
+        draft['photo_bytes'] = content
         draft['photo_name'] = uploaded.name
         draft['remove_photo'] = False
     else:
+        _reset_photo_analysis(draft)
         draft.pop('photo_input_key', None)
         draft['photo_bytes'] = draft['photo_name'] = None
 
@@ -400,7 +406,17 @@ def _render_meal_photo(draft, db_path):
 def _render_meal_dish(rgb, draft, db_path):
     from dish_vision_ui import render_dish_choice
 
-    selected_dish = render_dish_choice(rgb, draft)
+    recipe = draft.get('finished_recipe')
+    # A photo can populate a fresh template. Keep saved or changed ingredient
+    # lists available until the user explicitly applies a different recipe.
+    can_apply_photo = rgb is not None and not draft['edit'] and draft['cooking_session_id'] is None and (
+        not recipe or (not recipe['ingredients_confirmed'] and recipe['consumed_percent'] == 100
+                       and recipe['ingredients'] == standard_rows(recipe['dish'], draft['recipe_weight'])))
+    selected_dish = render_dish_choice(rgb, draft, prefer_photo=can_apply_photo)
+    if selected_dish is None and can_apply_photo and recipe and 'manual_dish_choice' in draft:
+        draft.pop('finished_recipe')
+        draft['photo_name_confirmed'] = False
+        recipe = None
     measurements = {}
     valid = True
     if selected_dish or draft.get('finished_recipe'):
@@ -410,11 +426,14 @@ def _render_meal_dish(rgb, draft, db_path):
             original = draft.get('original_measurement_snapshot')
             if original is not None:
                 measurements[original['id']] = original
-            if selected_dish and selected_dish != draft.get('finished_recipe', {}).get('dish'):
-                if draft.get('finished_recipe'):
-                    st.caption('レシピを切り替えると、材料と分量が新しい参考値になります。')
-                st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch',
-                          on_click=_apply_finished_recipe, args=(draft, selected_dish, measurements))
+            if selected_dish and selected_dish != (recipe or {}).get('dish'):
+                if can_apply_photo:
+                    _apply_finished_recipe(draft, selected_dish, measurements, keep_custom_name=True)
+                else:
+                    if recipe:
+                        st.caption('レシピを切り替えると、材料と分量が新しい参考値になります。')
+                    st.button('選んだ料理の標準レシピを使う', key='meal_use_recipe', width='stretch',
+                              on_click=_apply_finished_recipe, args=(draft, selected_dish, measurements))
             error = draft.pop('recipe_apply_error', None)
             if error:
                 st.warning(error)

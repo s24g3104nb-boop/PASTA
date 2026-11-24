@@ -123,46 +123,74 @@ assert '•' in at.button(key='diary_day_'+day).label
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_vision_suggestion_runs_once_and_accepts_manual_override(tmp_path):
+def test_photo_recipe_applies_top_candidate_and_reranks_replacement(tmp_path):
     script = r'''
+from io import BytesIO
 import sys
-sys.path.insert(0,'pasta_weight_app_v2')
+
+from PIL import Image, ImageDraw
 from streamlit.testing.v1 import AppTest
-at=AppTest.from_string("""
-import numpy as np
-import streamlit as st
-from types import SimpleNamespace
+
+sys.path.insert(0, 'pasta_weight_app_v2')
 import dish_vision_ui
-class MockVision:
-    def predict(self, rgb):
-        st.session_state['recognition_runs']=st.session_state.get('recognition_runs',0)+1
-        return SimpleNamespace(name='トマトパスタ', visible_options=())
-dish_vision_ui._classifier=lambda checkpoint, device: MockVision()
-draft=st.session_state.setdefault('meal', {'id':'capture-fixture'})
-# Streamlit may deliver a callback for a selector already cleared by a photo change.
-dish_vision_ui._remember_dish_choice(draft, 'already-removed')
-rgb=np.zeros((30,30,3), np.uint8) if st.checkbox('test-photo') else None
-selected=dish_vision_ui.render_dish_choice(rgb, draft)
-st.write(selected)
-""").run()
-at.toggle[0].set_value(False).run()
-at.checkbox[0].check().run()
-assert not at.exception and 'recognition_runs' not in at.session_state
-at.toggle[0].set_value(True).run()
-assert not at.exception and at.session_state['recognition_runs']==1
-assert at.selectbox[0].value=='トマトパスタ'
-assert at.selectbox[0].options==['料理を選ぶ（任意）', 'カルボナーラ', 'トマトパスタ', 'ジェノベーゼ']
-at.selectbox[0].set_value('ジェノベーゼ').run()
-assert not at.exception and at.selectbox[0].value=='ジェノベーゼ'
-at.toggle[0].set_value(False).run()
-assert at.selectbox[0].value=='ジェノベーゼ' and not at.info
-assert at.session_state['recognition_runs']==1
+
+calls = []
+suggest = dish_vision_ui.suggest_dish_from_color
+
+def counted_suggestion(rgb):
+    calls.append(tuple(rgb[rgb.shape[0] // 2, rgb.shape[1] // 2]))
+    return suggest(rgb)
+
+def field(elements, label):
+    return next(item for item in elements if item.label == label)
+
+def upload(color):
+    buffer = BytesIO()
+    image = Image.new('RGB', (72, 48), '#ececea')
+    ImageDraw.Draw(image).ellipse((10, 6, 61, 41), fill=color)
+    image.save(buffer, format='PNG')
+    # Reusing a misleading name verifies that the image bytes drive selection.
+    at.file_uploader[0].upload('カルボナーラ.png', buffer.getvalue(), 'image/png').run()
+
+def check_recipe(name, title=None):
+    assert not at.exception and not at.error
+    assert field(at.selectbox, '標準レシピの料理').value == name
+    assert field(at.text_input, '料理名').value == (title or name)
+    assert any(f'{name}の標準レシピ' in notice.value for notice in at.caption)
+    assert any('料理全体' in notice.value for notice in at.markdown)
+
+dish_vision_ui.suggest_dish_from_color = counted_suggestion
+at = AppTest.from_file('pasta_weight_app_v2/app.py', default_timeout=20).run()
+at.button(key='home_meal').click().run()
+assert field(at.selectbox, '標準レシピの料理').value is None
+assert not calls
+upload('#c83a34')
+check_recipe('トマトパスタ')
+assert any(notice.value == '写真からの料理候補：トマトパスタ' for notice in at.info)
+assert len(calls) == 1
+field(at.selectbox, '標準レシピの料理').set_value('カルボナーラ').run()
+check_recipe('カルボナーラ')
+at.run()
+check_recipe('カルボナーラ')
+assert len(calls) == 1
+field(at.text_input, '料理名').set_value('夕食のパスタ').run()
+assert len(calls) == 1
+upload('#477a32')
+check_recipe('ジェノベーゼ', '夕食のパスタ')
+assert len(calls) == 2 and calls[0] != calls[1]
+upload('#a0a0a0')
+check_recipe('カルボナーラ', '夕食のパスタ')
+assert len(calls) == 3
+field(at.selectbox, '標準レシピの料理').select_index(0).run()
+at.run()
+assert field(at.selectbox, '標準レシピの料理').value is None
+assert field(at.text_input, '料理名').value == '夕食のパスタ'
+assert not any('の標準レシピです' in notice.value for notice in at.caption)
 '''
+    env = dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data'))
+    env.pop('PASTA_OPENCLIP_CHECKPOINT', None)
     result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
-                            env=dict(os.environ, PASTA_DATA_DIR=str(tmp_path/'data'),
-                                     PASTA_OPENCLIP_CHECKPOINT=str(__file__),
-                                     PASTA_DISH_HEAD_PATH=str(tmp_path/'invalid_research_artifact.json')),
-                            capture_output=True, text=True, timeout=30)
+                            env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -193,6 +221,8 @@ assert [heading.value for heading in at.subheader if heading.value.startswith('S
 assert at.button(key='meal_save').disabled
 at.file_uploader[0].upload('first.png', photo('red'), 'image/png').run()
 field(at.selectbox, '標準レシピの料理').set_value('ジェノベーゼ').run()
+field(at.number_input, '乾麺の参考重量（g）').set_value(95).run()
+field(at.checkbox, '実際に使った材料と分量を確認しました').check().run()
 field(at.text_input, '料理名').set_value('夕食のパスタ').run()
 day = field(at.date_input, '食べた日').value
 field(at.date_input, '食べた日').set_value(None).run()
@@ -208,15 +238,20 @@ resume.click().run()
 assert field(at.selectbox, '標準レシピの料理').value == 'ジェノベーゼ'
 assert field(at.text_input, '料理名').value == '夕食のパスタ'
 assert at.button(key='meal_remove_photo')
-at.file_uploader[0].upload('replacement.png', photo('green'), 'image/png').run()
-assert field(at.selectbox, '標準レシピの料理').value == 'ジェノベーゼ'
+at.file_uploader[0].upload('replacement.png', photo('firebrick'), 'image/png').run()
+field(at.selectbox, '標準レシピの料理').set_value('トマトパスタ').run()
+assert at.button(key='meal_use_recipe')
+assert field(at.number_input, '乾麺の参考重量（g）').value == 95
+assert field(at.checkbox, '実際に使った材料と分量を確認しました').value
 assert field(at.text_input, '料理名').value == '夕食のパスタ'
 at.button(key='meal_save').click().run()
 assert not at.exception
 assert any('食事記録を保存しました' in notice.value for notice in at.success)
 row, = entries()
+recipe = row['nutrition_snapshot']['calculation']['recipe_input']
+assert recipe['dish'] == 'ジェノベーゼ' and recipe['ingredients_confirmed']
 with Image.open(photo_path(row['photo'])) as saved_photo:
-    assert saved_photo.getpixel((0, 0)) == (0, 128, 0)
+    assert saved_photo.getpixel((0, 0)) == (178, 34, 34)
 
 at.button(key='meal_detail_back').click().run()
 assert at.radio(key='diary_view').value == 'カレンダー'
